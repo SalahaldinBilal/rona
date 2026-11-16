@@ -1,0 +1,47 @@
+[package]
+name = "rona"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[workspace]
+members = ["xtask"]
+
+[features]
+default = ["self-update"]
+# Off for builds that a package manager updates.
+self-update = []
+
+[dependencies]
+arboard = { version = "3.7", default-features = false }
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+glow = "0.18"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+libloading = "0.9.1"
+minisign-verify = "0.2"
+rfd = "0.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+slint = { version = "~1.19", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "unstable-winit-030"] }
+ureq = { version = "3.5.2", default-features = false, features = ["rustls"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Console",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+minisign = "0.7"
+
+[build-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png", "ico"] }
+resvg = { version = "0.50", default-features = false }
+slint-build = "~1.19"
+winresource = "0.1.34"

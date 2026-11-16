@@ -1,0 +1,103 @@
+import { Theme } from "theme.slint";
+import { Player } from "state.slint";
+import { Clickable } from "components/clickable.slint";
+
+export component SeekBar inherits Rectangle {
+    in property <bool> enabled: true;
+    property <float> playback-progress: Player.duration > 0 ? max(0, min(1, Player.position / Player.duration)) : 0;
+    out property <bool> dragging: area.pressed;
+    out property <float> hover-fraction: max(0, min(1, area.mouse-x / area.width));
+    property <float> progress: area.pressed ? root.hover-fraction : root.playback-progress;
+    property <bool> active: area.has-hover || area.pressed;
+
+    height: 16px;
+
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: root.active ? 6px : 4px;
+        animate height { duration: Theme.hover-duration; easing: ease-out; }
+        border-radius: self.height / 2;
+        background: #ffffff1a;
+
+        for range in Player.loaded-ranges: Rectangle {
+            x: parent.width * range.start;
+            width: parent.width * (range.end - range.start);
+            border-radius: parent.border-radius;
+            background: #ffffff38;
+        }
+
+        Rectangle {
+            x: 0;
+            width: parent.width * root.progress;
+            border-radius: parent.border-radius;
+            background: Theme.accent;
+        }
+
+        for chapter in Player.chapters: Rectangle {
+            visible: chapter.time > 0 && Player.duration > 0;
+            x: parent.width * chapter.time / Player.duration - self.width / 2;
+            width: 2px;
+            background: Theme.chrome;
+        }
+    }
+
+    Rectangle {
+        x: root.width * root.progress - self.width / 2;
+        y: (root.height - self.height) / 2;
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        background: white;
+        drop-shadow-blur: 4px;
+        drop-shadow-color: #00000080;
+        opacity: root.active ? 1 : 0;
+        animate opacity { duration: Theme.hover-duration; }
+    }
+
+    area := Clickable {
+        enabled: root.enabled;
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                Player.seek-preview(root.hover-fraction);
+            }
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                Player.seek(root.hover-fraction);
+            }
+        }
+        moved => { Player.seek-preview(root.hover-fraction); }
+    }
+
+    if area.has-hover && root.enabled: tip := Rectangle {
+        property <float> hover-time: Player.duration * root.hover-fraction;
+        property <string> chapter: Player.chapter-title-at(self.hover-time);
+
+        x: max(0px, min(root.width - self.width, area.mouse-x - self.width / 2));
+        y: -self.height - 6px;
+        width: tip-content.preferred-width + 20px;
+        height: tip-content.preferred-height + 12px;
+        border-radius: 6px;
+        background: Theme.panel;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: #00000073;
+
+        tip-content := VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+
+            if tip.chapter != "": Text {
+                text: tip.chapter;
+                color: Theme.muted;
+                font-size: 12px;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: Player.format-time(tip.hover-time);
+                color: Theme.text;
+                font-size: 13px;
+                font-weight: 600;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}

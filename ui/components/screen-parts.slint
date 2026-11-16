@@ -1,0 +1,63 @@
+import { Theme } from "../theme.slint";
+import { Icon } from "icon.slint";
+
+export global Glyphs {
+    out property <string> drop: "M 12 3.5 V 14 M 7.5 9.5 L 12 14 L 16.5 9.5 M 4 14.5 V 19.5 H 20 V 14.5";
+    out property <string> file-missing: "M 6 3 H 14 L 18 7 V 21 H 6 Z M 14 3 V 7 H 18 M 9.5 11.5 L 14.5 16.5 M 14.5 11.5 L 9.5 16.5";
+    out property <string> file-unknown: "M 6 3 H 14 L 18 7 V 21 H 6 Z M 14 3 V 7 H 18 M 10 12 A 2 2 0 1 1 12.6 13.9 C 12.1 14.1 12 14.4 12 15 M 12 17.4 V 17.6";
+    out property <string> warning: "M 12 3.5 A 8.5 8.5 0 1 1 12 20.5 A 8.5 8.5 0 1 1 12 3.5 Z M 12 7.8 V 13 M 12 15.9 V 16.3";
+    out property <string> no-network: "M 3 9.5 A 13 13 0 0 1 21 9.5 M 6.2 12.8 A 8.4 8.4 0 0 1 17.8 12.8 M 9.3 16 A 3.9 3.9 0 0 1 14.7 16 M 12 19.3 V 19.5 M 4 4 L 20 20";
+    out property <string> replay: "M 5 12 A 7 7 0 1 0 7.05 7.05 M 7 2.8 V 7 H 11.2";
+    out property <string> note: "M 9 17.5 V 5.5 L 19 3.5 V 15.5 M 9 17.5 A 2.5 2.5 0 1 1 4 17.5 A 2.5 2.5 0 1 1 9 17.5 Z M 19 15.5 A 2.5 2.5 0 1 1 14 15.5 A 2.5 2.5 0 1 1 19 15.5 Z M 9 9 L 19 7";
+}
+
+export component BigIcon inherits Rectangle {
+    in property <string> commands;
+    in property <color> tint: Theme.muted;
+    in property <brush> tone: #ffffff0d;
+
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
+    background: root.tone;
+
+    Icon {
+        width: 26px;
+        height: 26px;
+        viewbox: 24;
+        tint: root.tint;
+        stroke-commands: root.commands;
+    }
+}
+
+export component KeyHint inherits HorizontalLayout {
+    in property <string> key;
+    in property <string> label;
+
+    spacing: 6px;
+
+    VerticalLayout {
+        alignment: center;
+
+        Rectangle {
+            width: key-text.preferred-width + 10px;
+            height: 18px;
+            border-radius: 4px;
+            background: #ffffff14;
+
+            key-text := Text {
+                text: root.key;
+                color: Theme.muted;
+                font-size: 11px;
+                font-weight: 600;
+            }
+        }
+    }
+
+    Text {
+        text: root.label;
+        color: Theme.muted;
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+}

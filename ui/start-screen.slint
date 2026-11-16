@@ -1,0 +1,121 @@
+import { Theme } from "theme.slint";
+import { Player, Phase, DragState } from "state.slint";
+import { TextButton } from "components/form.slint";
+import { BigIcon, KeyHint, Glyphs } from "components/screen-parts.slint";
+
+export component StartScreen inherits Rectangle {
+    visible: Player.phase == Phase.idle;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 6px;
+
+        HorizontalLayout {
+            alignment: center;
+            padding-bottom: 10px;
+
+            BigIcon {
+                commands: Glyphs.drop;
+            }
+        }
+
+        Text {
+            text: "Drop a video or audio file here";
+            color: Theme.text;
+            font-size: 17px;
+            font-weight: 600;
+            horizontal-alignment: center;
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            padding-top: 14px;
+
+            TextButton {
+                text: "Open file";
+                primary: true;
+                clicked => { Player.open-file(); }
+            }
+
+            TextButton {
+                text: "Open link";
+                clicked => { Player.show-link-box(); }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 14px;
+            padding-top: 16px;
+
+            KeyHint {
+                key: "Ctrl+O";
+                label: "open file";
+            }
+
+            KeyHint {
+                key: "Ctrl+U";
+                label: "open link";
+            }
+
+            KeyHint {
+                key: "Ctrl+V";
+                label: "paste a link";
+            }
+        }
+    }
+}
+
+export component DropOverlay inherits Rectangle {
+    property <bool> playable: Player.drag-state == DragState.playable;
+
+    visible: Player.drag-state != DragState.none;
+    background: #000000d9;
+
+    // Slint has no dashed borders, so the drop zone is a solid outline.
+    Rectangle {
+        x: 14px;
+        y: 14px;
+        width: parent.width - 28px;
+        height: parent.height - 28px;
+        border-radius: 12px;
+        border-width: 2px;
+        border-color: root.playable ? Theme.accent : #ffffff40;
+        background: root.playable ? #6ea8ff12 : #ffffff08;
+    }
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 6px;
+        padding-left: 40px;
+        padding-right: 40px;
+
+        HorizontalLayout {
+            alignment: center;
+            padding-bottom: 10px;
+
+            BigIcon {
+                commands: root.playable ? Glyphs.drop : Glyphs.file-unknown;
+                tint: root.playable ? Theme.accent : Theme.muted;
+                tone: root.playable ? Theme.accent-soft : #ffffff0d;
+            }
+        }
+
+        Text {
+            text: root.playable ? "Drop to play" : "Not a video or audio file";
+            color: root.playable ? Theme.text : Theme.muted;
+            font-size: 17px;
+            font-weight: 600;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: Player.drag-name;
+            color: Theme.muted;
+            font-size: 13px;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+}

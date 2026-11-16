@@ -1,0 +1,139 @@
+import { Theme } from "theme.slint";
+import { Player, Panels } from "state.slint";
+import { Icon } from "components/icon.slint";
+import { IconButton } from "components/buttons.slint";
+import { Clickable } from "components/clickable.slint";
+
+component PlaylistRow inherits Rectangle {
+    in property <int> index;
+    in property <string> title;
+    in property <bool> current;
+    in property <bool> failed;
+    callback clicked();
+
+    height: 46px;
+    border-radius: 6px;
+    background: root.current ? Theme.accent-soft : area.pressed ? Theme.pressed : area.has-hover ? Theme.hover : transparent;
+    animate background { duration: Theme.hover-duration; }
+
+    if root.current: Rectangle {
+        x: 0;
+        y: 10px;
+        width: 3px;
+        height: root.height - 20px;
+        border-radius: 2px;
+        background: Theme.accent;
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+
+        Text {
+            width: 22px;
+            text: root.index + 1;
+            color: root.current ? Theme.accent : Theme.muted;
+            font-size: 13px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: root.title;
+                color: root.failed && !root.current ? Theme.muted : Theme.text;
+                font-size: 13px;
+                overflow: elide;
+            }
+
+            if root.current || root.failed: Text {
+                text: root.current ? "Now playing" : "Couldn't play";
+                color: root.current ? Theme.muted : Theme.danger;
+                font-size: 11px;
+            }
+        }
+    }
+
+    area := Clickable {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component PlaylistPanel inherits Rectangle {
+    background: Theme.chrome;
+
+    TouchArea {
+        clicked => { Panels.focus-requests += 1; }
+    }
+
+    Rectangle {
+        x: 0;
+        width: 1px;
+        background: Theme.line;
+    }
+
+    VerticalLayout {
+        padding-left: 1px;
+
+        Rectangle {
+            height: 36px;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                spacing: 8px;
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: "Playlist";
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: Player.playlist.length == 1 ? "1 item" : Player.playlist.length + " items";
+                    color: Theme.muted;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+
+                IconButton {
+                    clicked => { Panels.playlist-open = false; }
+
+                    Icon {
+                        stroke-commands: "M 5 5 L 13 13 M 13 5 L 5 13";
+                    }
+                }
+            }
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+        }
+
+        list := Flickable {
+            vertical-stretch: 1;
+            content-height: rows.preferred-height;
+
+            rows := VerticalLayout {
+                width: list.width;
+                padding: 4px;
+
+                for item[index] in Player.playlist: PlaylistRow {
+                    index: index;
+                    title: item.title;
+                    current: item.current;
+                    failed: item.failed;
+                    clicked => { Player.play-entry(index); }
+                }
+            }
+        }
+    }
+}

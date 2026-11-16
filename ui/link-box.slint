@@ -1,0 +1,130 @@
+import { Theme } from "theme.slint";
+import { Player, Panels } from "state.slint";
+import { Icon } from "components/icon.slint";
+import { IconButton } from "components/buttons.slint";
+import { TextButton, TextField } from "components/form.slint";
+
+export component LinkBox inherits Rectangle {
+    background: #00000080;
+
+    function dismiss() {
+        Panels.link-open = false;
+        Panels.focus-requests += 1;
+    }
+
+    function submit() {
+        Panels.link-error = Player.open-link(Panels.link-text);
+        if (Panels.link-error != "") {
+            input.focus-input();
+        }
+    }
+
+    init => { input.select-everything(); }
+
+    TouchArea {
+        clicked => { root.dismiss(); }
+    }
+
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.dismiss();
+                return accept;
+            }
+            return reject;
+        }
+
+        panel := Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: min(480px, root.width - 32px);
+            height: content.preferred-height;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: Theme.line;
+            background: Theme.panel;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: #00000080;
+
+            TouchArea {}
+
+            content := VerticalLayout {
+                padding-left: 18px;
+                padding-right: 10px;
+                padding-top: 6px;
+                padding-bottom: 18px;
+                spacing: 8px;
+
+                HorizontalLayout {
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "Open link";
+                        color: Theme.text;
+                        font-size: 14px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    IconButton {
+                        clicked => { root.dismiss(); }
+
+                        Icon {
+                            stroke-commands: "M 5 5 L 13 13 M 13 5 L 5 13";
+                            tint: Theme.muted;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    padding-right: 8px;
+
+                    input := TextField {
+                        horizontal-stretch: 1;
+                        text <=> Panels.link-text;
+                        placeholder: "https://";
+                        error: Panels.link-error != "";
+                        edited => { Panels.link-error = ""; }
+                        accepted => { root.submit(); }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        TextButton {
+                            height: 30px;
+                            text: "Open";
+                            primary: true;
+                            enabled: Panels.link-error == "" && Panels.link-text != "";
+                            clicked => { root.submit(); }
+                        }
+                    }
+                }
+
+                if Panels.link-error != "": HorizontalLayout {
+                    spacing: 6px;
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Icon {
+                            width: 14px;
+                            height: 14px;
+                            viewbox: 14;
+                            tint: Theme.danger;
+                            stroke-commands: "M 7 2 A 5 5 0 1 1 7 12 A 5 5 0 1 1 7 2 Z M 7 4.6 V 7.6 M 7 9.4 V 9.6";
+                        }
+                    }
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: Panels.link-error;
+                        color: Theme.danger;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

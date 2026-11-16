@@ -1,0 +1,903 @@
+import { Theme } from "theme.slint";
+import { Panels, Settings, Updates, UpdatePhase } from "state.slint";
+import { Icon } from "components/icon.slint";
+import { IconButton } from "components/buttons.slint";
+import { Clickable } from "components/clickable.slint";
+import { Dot } from "components/dot.slint";
+import { TextField, Checkbox, Segmented, Select, Slider, ColorChoice, TextButton } from "components/form.slint";
+
+component SectionHeading inherits Text {
+    color: Theme.muted;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+component Gap inherits Rectangle {
+    height: 4px;
+}
+
+component InfoText inherits Text {
+    color: Theme.muted;
+    font-size: 12px;
+    wrap: word-wrap;
+}
+
+component LabeledRow inherits HorizontalLayout {
+    in property <string> label;
+    spacing: 10px;
+
+    Text {
+        width: 150px;
+        text: root.label;
+        color: Theme.muted;
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+
+    @children
+}
+
+component Unit inherits Text {
+    color: Theme.muted;
+    font-size: 12px;
+    vertical-alignment: center;
+}
+
+component SettingField inherits TextField {
+    edited => { Settings.changed(); }
+}
+
+component NumberField inherits SettingField {
+    width: 80px;
+    numeric: true;
+    positive: true;
+}
+
+component SliderRow inherits LabeledRow {
+    in-out property <float> value;
+    in property <float> minimum;
+    in property <float> maximum;
+    in property <string> suffix;
+
+    Slider {
+        horizontal-stretch: 1;
+        value <=> root.value;
+        minimum: root.minimum;
+        maximum: root.maximum;
+        edited => { Settings.changed(); }
+    }
+
+    Text {
+        width: 44px;
+        text: round(root.value) + root.suffix;
+        color: Theme.text;
+        font-size: 12px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+}
+
+component Page inherits Flickable {
+    content-height: content.preferred-height;
+
+    content := VerticalLayout {
+        width: root.width;
+        padding: 16px;
+        padding-top: 14px;
+        spacing: 10px;
+        alignment: start;
+
+        @children
+    }
+}
+
+component PlaybackPage inherits Page {
+    SectionHeading { text: "ON OPEN"; }
+
+    Checkbox {
+        text: "Resume where I left off";
+        checked <=> Settings.resume;
+        toggled => { Settings.changed(); }
+    }
+
+    LabeledRow {
+        label: "Forget positions after";
+
+        NumberField {
+            text <=> Settings.resume-days;
+            whole: true;
+            enabled: Settings.resume;
+        }
+        Unit { text: "days"; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    SliderRow {
+        label: "Start volume";
+        value <=> Settings.start-volume;
+        minimum: 0;
+        maximum: 100;
+        suffix: "%";
+    }
+
+    Gap {}
+    SectionHeading { text: "AT THE END OF A FILE"; }
+
+    Segmented {
+        options: ["Stop on last frame", "Play next", "Loop"];
+        current-index <=> Settings.end-action;
+        selected => { Settings.changed(); }
+    }
+
+    Gap {}
+    SectionHeading { text: "SEEKING"; }
+
+    LabeledRow {
+        label: "Arrow keys jump";
+
+        NumberField { text <=> Settings.seek-short; }
+        Unit { text: "seconds"; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    LabeledRow {
+        label: "Shift + arrow keys jump";
+
+        NumberField { text <=> Settings.seek-long; }
+        Unit { text: "seconds"; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    LabeledRow {
+        label: "Speed steps";
+
+        SettingField {
+            horizontal-stretch: 1;
+            text <=> Settings.speed-steps;
+            valid: Settings.valid-speeds(self.draft);
+        }
+    }
+
+    InfoText {
+        text: "The speed button goes through these in order.";
+    }
+
+    Gap {}
+    SectionHeading { text: "CHAPTERS"; }
+
+    Checkbox {
+        text: "Skip chapters with these names";
+        checked <=> Settings.skip-chapters;
+        toggled => { Settings.changed(); }
+    }
+
+    LabeledRow {
+        label: "Chapter names";
+
+        SettingField {
+            horizontal-stretch: 1;
+            text <=> Settings.skip-chapter-titles;
+            placeholder: "For example Opening, Ending, OP, ED, Intro, Outro, Preview";
+            enabled: Settings.skip-chapters;
+        }
+    }
+
+    InfoText {
+        text: "Separate names with commas. A chapter is skipped when its title contains one of them as whole words, ignoring case. Each chapter is only skipped once per file, so you can still go back to it.";
+    }
+}
+
+component VideoPage inherits Page {
+    SectionHeading { text: "RENDERING"; }
+
+    LabeledRow {
+        label: "Renderer";
+
+        Select {
+            horizontal-stretch: 1;
+            options: Settings.renderers;
+            current-index <=> Settings.renderer;
+            selected => { Settings.changed(); }
+        }
+    }
+
+    InfoText {
+        text: Settings.renderer-hint;
+    }
+
+    if Settings.renderer != Settings.renderer-at-start: InfoText {
+        text: "Restart Rona to switch to this renderer.";
+        color: Theme.accent;
+    }
+
+    Gap {}
+    SectionHeading { text: "DECODING"; }
+
+    LabeledRow {
+        label: "Hardware decoding";
+
+        Segmented {
+            horizontal-stretch: 1;
+            options: ["Auto", "Off"];
+            current-index <=> Settings.hardware-decoding;
+            selected => { Settings.changed(); }
+        }
+    }
+
+    InfoText {
+        text: "Auto uses the GPU when it can and falls back to the CPU. Turn it off if a file shows broken frames.";
+    }
+
+    Gap {}
+    SectionHeading { text: "PICTURE"; }
+
+    LabeledRow {
+        label: "Scaling quality";
+
+        Select {
+            horizontal-stretch: 1;
+            options: ["Fast", "Balanced", "High"];
+            current-index <=> Settings.scaling;
+            selected => { Settings.changed(); }
+        }
+    }
+
+    Checkbox {
+        text: "Smooth out color banding";
+        checked <=> Settings.deband;
+        toggled => { Settings.changed(); }
+    }
+
+    LabeledRow {
+        label: "Aspect ratio";
+
+        Select {
+            horizontal-stretch: 1;
+            options: ["From file", "16:9", "4:3", "21:9", "2.35:1"];
+            current-index <=> Settings.aspect;
+            selected => { Settings.changed(); }
+        }
+    }
+}
+
+component AudioPage inherits Page {
+    SectionHeading { text: "TRACKS"; }
+
+    LabeledRow {
+        label: "Preferred languages";
+
+        SettingField {
+            horizontal-stretch: 1;
+            text <=> Settings.audio-languages;
+            placeholder: "For example jpn, eng";
+        }
+    }
+
+    InfoText {
+        text: "Comma separated language codes, first match wins.";
+    }
+
+    Gap {}
+    SectionHeading { text: "VOLUME"; }
+
+    LabeledRow {
+        label: "Max volume";
+
+        Segmented {
+            horizontal-stretch: 1;
+            options: ["100%", "150%", "200%"];
+            current-index <=> Settings.volume-max;
+            selected => { Settings.changed(); }
+        }
+    }
+
+    Checkbox {
+        text: "Even out loud and quiet parts";
+        checked <=> Settings.normalize;
+        toggled => { Settings.changed(); }
+    }
+
+    LabeledRow {
+        label: "Output device";
+
+        Select {
+            horizontal-stretch: 1;
+            options: Settings.audio-devices;
+            current-index <=> Settings.audio-device;
+            selected => { Settings.changed(); }
+        }
+    }
+}
+
+component SubtitlesPage inherits Page {
+    property <[color]> colors: [#ffffff, #fff3a0, #ffd400, #7ee8fa, #9be37a, #b0b0b0, #404040, #000000];
+
+    SectionHeading { text: "TRACKS"; }
+
+    LabeledRow {
+        label: "Preferred languages";
+
+        SettingField {
+            horizontal-stretch: 1;
+            text <=> Settings.subtitle-languages;
+            placeholder: "For example eng";
+        }
+    }
+
+    Checkbox {
+        text: "Load subtitle files next to the video";
+        checked <=> Settings.subtitle-auto-load;
+        toggled => { Settings.changed(); }
+    }
+
+    Checkbox {
+        text: "Skip subtitles when the audio is already in that language";
+        checked <=> Settings.skip-matching-subtitles;
+        toggled => { Settings.changed(); }
+    }
+
+    Gap {}
+    SectionHeading { text: "LOOK"; }
+
+    LabeledRow {
+        label: "Font";
+
+        SettingField {
+            horizontal-stretch: 1;
+            text <=> Settings.subtitle-font;
+            placeholder: "Default";
+        }
+    }
+
+    SliderRow {
+        label: "Size";
+        value <=> Settings.subtitle-size;
+        minimum: 16;
+        maximum: 80;
+    }
+
+    LabeledRow {
+        label: "Text and outline";
+
+        ColorChoice {
+            value <=> Settings.subtitle-color;
+            options: root.colors;
+            selected => { Settings.changed(); }
+        }
+
+        ColorChoice {
+            value <=> Settings.subtitle-border-color;
+            options: root.colors;
+            selected => { Settings.changed(); }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    SliderRow {
+        label: "Distance from bottom";
+        value <=> Settings.subtitle-raise;
+        minimum: 0;
+        maximum: 50;
+        suffix: "%";
+    }
+
+    Checkbox {
+        text: "Use these for styled subtitles too";
+        checked <=> Settings.subtitle-override-styles;
+        toggled => { Settings.changed(); }
+    }
+}
+
+component StreamingPage inherits Page {
+    SectionHeading { text: "CACHE"; }
+
+    LabeledRow {
+        label: "Memory cache";
+
+        NumberField {
+            text <=> Settings.cache-size;
+            whole: true;
+        }
+        Unit { text: "MiB"; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    InfoText {
+        text: "Downloaded data kept in memory, so switching tracks or seeking back does not download it again. Applies to the next stream you open.";
+    }
+
+    LabeledRow {
+        label: "Read ahead";
+
+        NumberField {
+            text <=> Settings.read-ahead;
+            whole: true;
+        }
+        Unit { text: "MiB"; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    Gap {}
+    SectionHeading { text: "CONNECTION"; }
+
+    LabeledRow {
+        label: "Connect timeout";
+
+        NumberField { text <=> Settings.connect-timeout; }
+        Unit { text: "seconds"; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    LabeledRow {
+        label: "Read timeout";
+
+        NumberField { text <=> Settings.read-timeout; }
+        Unit { text: "seconds"; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    LabeledRow {
+        label: "User agent";
+
+        SettingField {
+            horizontal-stretch: 1;
+            text <=> Settings.user-agent;
+            placeholder: "Default";
+        }
+    }
+}
+
+component InterfacePage inherits Page {
+    SectionHeading { text: "WINDOW"; }
+
+    Checkbox {
+        text: "Keep window on top while playing";
+        checked <=> Settings.on-top-while-playing;
+        toggled => { Settings.changed(); }
+    }
+
+    Checkbox {
+        text: "Remember window size and position";
+        checked <=> Settings.remember-window;
+        toggled => { Settings.changed(); }
+    }
+
+    LabeledRow {
+        label: "Double click on video";
+
+        Segmented {
+            horizontal-stretch: 1;
+            options: ["Fullscreen", "Nothing"];
+            current-index <=> Settings.double-click;
+            selected => { Settings.changed(); }
+        }
+    }
+
+    Gap {}
+    SectionHeading { text: "FULLSCREEN"; }
+
+    LabeledRow {
+        label: "Hide controls after";
+
+        NumberField { text <=> Settings.hide-controls-after; }
+        Unit { text: "seconds"; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    LabeledRow {
+        label: "Messages stay for";
+
+        NumberField { text <=> Settings.osd-duration; }
+        Unit { text: "seconds"; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+}
+
+component ShortcutRow inherits Rectangle {
+    in property <string> action;
+    in property <string> key;
+    in property <bool> capturing;
+    callback clicked();
+
+    height: 30px;
+    border-radius: 6px;
+    background: root.capturing ? Theme.accent-soft : area.pressed ? Theme.pressed : area.has-hover ? Theme.hover : transparent;
+    animate background { duration: Theme.hover-duration; }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.action;
+            color: Theme.text;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            Rectangle {
+                height: 22px;
+                min-width: 22px;
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: root.capturing ? Theme.accent : Theme.line;
+                background: #ffffff14;
+
+                HorizontalLayout {
+                    padding-left: 7px;
+                    padding-right: 7px;
+
+                    Text {
+                        text: root.capturing ? "Press a key" : root.key != "" ? root.key : "Not set";
+                        color: root.capturing ? Theme.accent : root.key != "" ? Theme.text : Theme.muted;
+                        font-size: 11px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+
+    area := Clickable {
+        clicked => { root.clicked(); }
+    }
+}
+
+component ShortcutsPage inherits Page {
+    InfoText {
+        text: "Click a shortcut, then press the new key. A key used elsewhere moves to the new action.";
+    }
+
+    VerticalLayout {
+        spacing: 2px;
+
+        for shortcut[index] in Settings.shortcuts: ShortcutRow {
+            action: shortcut.action;
+            key: shortcut.key;
+            capturing: Settings.capturing == index;
+            clicked => {
+                Settings.capturing = Settings.capturing == index ? -1 : index;
+                if (Settings.capturing >= 0) {
+                    capture.focus();
+                } else {
+                    Panels.focus-requests += 1;
+                }
+            }
+        }
+    }
+
+    capture := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if (Settings.capturing < 0) {
+                return reject;
+            }
+            if (Settings.bind-key(Settings.capturing, event.text)) {
+                Settings.capturing = -1;
+                Panels.focus-requests += 1;
+            }
+            return accept;
+        }
+        focus-changed-event => {
+            if (!self.has-focus) {
+                Settings.capturing = -1;
+            }
+        }
+    }
+}
+
+component UpdatesPage inherits Page {
+    property <UpdatePhase> phase: Updates.phase;
+    property <string> status: phase == UpdatePhase.idle
+        ? "Not checked yet."
+        : phase == UpdatePhase.checking
+            ? "Checking for updates…"
+            : phase == UpdatePhase.up-to-date
+                ? "You're on the latest version."
+                : phase == UpdatePhase.available
+                    ? (Updates.self-update
+                        ? "Version " + Updates.new-version + " is available."
+                        : "Version " + Updates.new-version + " is available. Download it from " + Updates.download-site + ".")
+                    : phase == UpdatePhase.downloading
+                        ? (Updates.progress < 0
+                            ? "Downloading the update…"
+                            : "Downloading the update, " + round(Updates.progress * 100) + "%")
+                        : phase == UpdatePhase.ready ? "Restart Rona to finish updating." : Updates.error;
+    property <bool> can-install: Updates.self-update && Updates.has-release
+        && (phase == UpdatePhase.available || phase == UpdatePhase.downloading || phase == UpdatePhase.failed);
+
+    SectionHeading { text: "VERSION"; }
+
+    HorizontalLayout {
+        spacing: 12px;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: "Rona " + Updates.current-version;
+                color: Theme.text;
+                font-size: 13px;
+                font-weight: 600;
+            }
+
+            Text {
+                text: root.status;
+                color: root.phase == UpdatePhase.failed ? Theme.danger : Theme.muted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            if root.phase == UpdatePhase.ready: TextButton {
+                text: "Restart";
+                primary: true;
+                clicked => { Updates.restart(); }
+            }
+
+            if root.phase != UpdatePhase.ready && root.can-install: TextButton {
+                text: "Install update";
+                primary: true;
+                enabled: root.phase != UpdatePhase.downloading;
+                clicked => { Updates.install(); }
+            }
+
+            if root.phase != UpdatePhase.ready && !root.can-install: TextButton {
+                text: "Check now";
+                enabled: root.phase != UpdatePhase.checking;
+                clicked => { Updates.check(); }
+            }
+        }
+    }
+
+    if root.phase == UpdatePhase.downloading: Rectangle {
+        height: 4px;
+        border-radius: 2px;
+        background: #ffffff1a;
+
+        Rectangle {
+            x: 0;
+            width: parent.width * max(0, Updates.progress);
+            animate width { duration: Theme.hover-duration; }
+            border-radius: 2px;
+            background: Theme.accent;
+        }
+    }
+
+    if Updates.notes != "" && (root.phase == UpdatePhase.available || root.phase == UpdatePhase.downloading
+        || root.phase == UpdatePhase.ready): VerticalLayout {
+        spacing: 6px;
+
+        Gap {}
+        SectionHeading { text: "WHAT'S NEW IN " + Updates.new-version; }
+
+        Text {
+            text: Updates.notes;
+            color: Theme.text;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+    }
+
+    Gap {}
+    SectionHeading { text: "CHECKING"; }
+
+    Checkbox {
+        text: "Check for updates when Rona starts";
+        checked <=> Settings.check-updates;
+        toggled => { Settings.changed(); }
+    }
+
+    InfoText {
+        text: "Updates are signed, and Rona only installs one whose signature matches.";
+    }
+}
+
+component NavItem inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    in property <bool> dot;
+    callback clicked();
+
+    height: 30px;
+    border-radius: 6px;
+    background: root.selected ? Theme.accent-soft : area.pressed ? Theme.pressed : area.has-hover ? Theme.hover : transparent;
+    animate background { duration: Theme.hover-duration; }
+
+    Text {
+        x: 10px;
+        text: root.text;
+        color: root.selected ? Theme.accent : Theme.text;
+        font-size: 13px;
+        font-weight: root.selected ? 600 : 400;
+        vertical-alignment: center;
+    }
+
+    if root.dot: Dot {
+        x: parent.width - self.width - 10px;
+    }
+
+    area := Clickable {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component SettingsDialog inherits Rectangle {
+    // In Panels, so the update banner can open the dialog on the Updates page.
+    property <int> page <=> Panels.settings-page;
+    property <[string]> pages: ["Playback", "Video", "Audio", "Subtitles", "Streaming", "Interface", "Shortcuts", "Updates"];
+
+    background: #00000080;
+
+    TouchArea {
+        clicked => {
+            Panels.settings-open = false;
+            Panels.focus-requests += 1;
+        }
+    }
+
+    Rectangle {
+        width: min(680px, root.width - 32px);
+        height: min(460px, root.height - 32px);
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.line;
+        background: Theme.chrome;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000099;
+        clip: true;
+
+        TouchArea {
+            clicked => { Panels.focus-requests += 1; }
+        }
+
+        VerticalLayout {
+            Rectangle {
+                height: 40px;
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 4px;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "Settings";
+                        color: Theme.text;
+                        font-size: 13px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        IconButton {
+                            clicked => {
+                                Panels.settings-open = false;
+                                Panels.focus-requests += 1;
+                            }
+
+                            Icon {
+                                stroke-commands: "M 5 5 L 13 13 M 13 5 L 5 13";
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.line;
+                }
+            }
+
+            HorizontalLayout {
+                vertical-stretch: 1;
+
+                Rectangle {
+                    width: 150px;
+
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 2px;
+                        alignment: start;
+
+                        for name[index] in root.pages: NavItem {
+                            text: name;
+                            selected: index == root.page;
+                            dot: index == 7 && Updates.has-release;
+                            clicked => {
+                                root.page = index;
+                                Settings.capturing = -1;
+                                if (index == 2) {
+                                    Settings.refresh-audio-devices();
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        x: parent.width - 1px;
+                        width: 1px;
+                        background: Theme.line;
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+
+                    if root.page == 0: PlaybackPage {}
+                    if root.page == 1: VideoPage {}
+                    if root.page == 2: AudioPage {}
+                    if root.page == 3: SubtitlesPage {}
+                    if root.page == 4: StreamingPage {}
+                    if root.page == 5: InterfacePage {}
+                    if root.page == 6: ShortcutsPage {}
+                    if root.page == 7: UpdatesPage {}
+                }
+            }
+
+            Rectangle {
+                height: 52px;
+
+                Rectangle {
+                    y: 0;
+                    height: 1px;
+                    background: Theme.line;
+                }
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 8px;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "Changes apply right away.";
+                        color: Theme.muted;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        TextButton {
+                            width: 130px;
+                            text: "Reset this page";
+                            clicked => { Settings.reset-page(root.page); }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        TextButton {
+                            width: 80px;
+                            text: "Done";
+                            primary: true;
+                            clicked => {
+                                Panels.settings-open = false;
+                                Panels.focus-requests += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

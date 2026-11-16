@@ -1,0 +1,245 @@
+import { Theme } from "theme.slint";
+import { Player, WindowControls, Panels, Recorder, Updates, Phase } from "state.slint";
+import { Dot } from "components/dot.slint";
+import { Icon } from "components/icon.slint";
+import { IconButton } from "components/buttons.slint";
+import { Badge } from "components/badge.slint";
+import { SeekBar } from "seek-bar.slint";
+import { VolumeControl } from "volume-control.slint";
+
+export component ControlBar inherits TouchArea {
+    property <bool> shown: !WindowControls.fullscreen || root.has-hover || Panels.tracks-open;
+    property <bool> has-file: Player.phase == Phase.playing;
+    property <bool> usable: root.shown && root.has-file;
+    property <float> dimmed: root.has-file ? 1 : 0.32;
+
+    height: Theme.controls-height;
+    changed mouse-x => { WindowControls.activity(); }
+    changed mouse-y => { WindowControls.activity(); }
+    clicked => { Panels.focus-requests += 1; }
+
+    Rectangle {
+        background: Theme.chrome;
+        opacity: root.shown ? 1 : 0;
+        animate opacity { duration: 50ms; easing: ease-out; }
+
+        Rectangle {
+            y: 0;
+            height: 1px;
+            background: Theme.line;
+        }
+
+        VerticalLayout {
+            padding-top: 1px;
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-bottom: 4px;
+
+            HorizontalLayout {
+                padding-left: 4px;
+                padding-right: 4px;
+
+                seek-bar := SeekBar {
+                    enabled: root.usable;
+                    opacity: root.dimmed;
+                }
+            }
+
+            HorizontalLayout {
+                height: 36px;
+                spacing: 2px;
+
+                IconButton {
+                    enabled: root.usable;
+                    opacity: root.dimmed;
+                    clicked => { Player.previous(); }
+
+                    Icon {
+                        fill-commands: "M 14 3.5 V 14.5 L 6 9 Z";
+                        stroke-commands: "M 4 3.5 V 14.5";
+                    }
+                }
+
+                IconButton {
+                    width: 36px;
+                    highlight-height: 36px;
+                    enabled: root.usable;
+                    opacity: root.dimmed;
+                    clicked => { Player.toggle-pause(); }
+
+                    Icon {
+                        width: 19px;
+                        height: 19px;
+                        viewbox: 20;
+                        fill-commands: Player.paused
+                            ? "M 6 3.5 V 16.5 L 16.5 10 Z"
+                            : "M 5 3.5 H 8.2 V 16.5 H 5 Z M 11.8 3.5 H 15 V 16.5 H 11.8 Z";
+                    }
+                }
+
+                IconButton {
+                    enabled: root.usable;
+                    opacity: root.dimmed;
+                    clicked => { Player.next(); }
+
+                    Icon {
+                        fill-commands: "M 4 3.5 V 14.5 L 12 9 Z";
+                        stroke-commands: "M 14 3.5 V 14.5";
+                    }
+                }
+
+                VolumeControl {
+                    enabled: root.shown;
+                }
+
+                Text {
+                    text: seek-bar.dragging
+                        ? Player.format-time(Player.duration * seek-bar.hover-fraction) + " / " + Player.format-time(Player.duration)
+                        : Player.time-text;
+                    color: Theme.text;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    opacity: root.dimmed;
+                }
+
+                if Player.download-speed != "": HorizontalLayout {
+                    padding-left: 12px;
+                    spacing: 4px;
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Icon {
+                            width: 12px;
+                            height: 12px;
+                            viewbox: 12;
+                            tint: Theme.muted;
+                            stroke-commands: "M 6 1.5 V 10 M 2.5 6.5 L 6 10 L 9.5 6.5";
+                        }
+                    }
+
+                    Text {
+                        text: Player.download-speed;
+                        color: Theme.muted;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    padding-right: 4px;
+
+                    HorizontalLayout {
+                        spacing: 3px;
+
+                        if root.has-file && !Player.audio-only && Player.hardware-decoding: Badge {
+                            text: "HW";
+                            highlight: true;
+                        }
+                        if root.has-file && !Player.audio-only && Player.resolution-badge != "": Badge {
+                            text: Player.resolution-badge;
+                        }
+                        if root.has-file && !Player.audio-only && Player.video-badge != "": Badge {
+                            text: Player.video-badge;
+                        }
+                        if root.has-file && Player.audio-badge != "": Badge {
+                            text: Player.audio-badge;
+                        }
+                    }
+                }
+
+                IconButton {
+                    width: 42px;
+                    enabled: root.usable;
+                    opacity: root.dimmed;
+                    clicked => { Player.cycle-speed(); }
+
+                    Text {
+                        text: Player.speed-text;
+                        color: Player.speed != 1 ? Theme.accent : Theme.text;
+                        font-size: 13px;
+                        font-weight: 600;
+                    }
+                }
+
+                IconButton {
+                    enabled: root.usable;
+                    opacity: root.dimmed;
+                    clicked => {
+                        Panels.recorder-open = !Panels.recorder-open;
+                        if (Panels.recorder-open) {
+                            Panels.playlist-open = false;
+                        }
+                    }
+
+                    Icon {
+                        tint: Recorder.recording ? Theme.danger : Panels.recorder-open ? Theme.accent : Theme.text;
+                        fill-commands: Recorder.recording ? "M 9 4.5 A 4.5 4.5 0 1 1 9 13.5 A 4.5 4.5 0 1 1 9 4.5 Z" : "";
+                        stroke-commands: Recorder.recording ? "" : "M 9 4.5 A 4.5 4.5 0 1 1 9 13.5 A 4.5 4.5 0 1 1 9 4.5 Z";
+                    }
+                }
+
+                IconButton {
+                    enabled: root.usable;
+                    opacity: root.dimmed;
+                    clicked => { Panels.tracks-open = !Panels.tracks-open; }
+
+                    Icon {
+                        tint: Panels.tracks-open ? Theme.accent : Theme.text;
+                        stroke-commands: "M 2 3.5 H 16 V 14.5 H 2 Z M 5 8 H 9 M 11 8 H 13 M 5 11 H 7 M 9 11 H 13";
+                    }
+                }
+
+                IconButton {
+                    enabled: root.shown;
+                    clicked => {
+                        Panels.playlist-open = !Panels.playlist-open;
+                        if (Panels.playlist-open) {
+                            Panels.recorder-open = false;
+                        }
+                    }
+
+                    Icon {
+                        tint: Panels.playlist-open ? Theme.accent : Theme.text;
+                        fill-commands: "M 12.5 11 V 16 L 16 13.5 Z";
+                        stroke-commands: "M 3 4.5 H 15 M 3 9 H 11 M 3 13.5 H 9";
+                    }
+                }
+
+                IconButton {
+                    enabled: root.shown;
+                    clicked => {
+                        Panels.settings-open = !Panels.settings-open;
+                        Panels.tracks-open = false;
+                    }
+
+                    if Updates.has-release: Dot {
+                        x: parent.width - self.width - 6px;
+                        y: 6px;
+                    }
+
+                    Icon {
+                        tint: Panels.settings-open ? Theme.accent : Theme.text;
+                        stroke-commands: "M 14.38 7.46 L 16.36 7.57 L 16.36 10.43 L 14.38 10.54 L 13.9 11.71 L 15.22 13.19 L 13.19 15.22 L 11.71 13.9 L 10.54 14.38 L 10.43 16.36 L 7.57 16.36 L 7.46 14.38 L 6.29 13.9 L 4.81 15.22 L 2.78 13.19 L 4.1 11.71 L 3.62 10.54 L 1.64 10.43 L 1.64 7.57 L 3.62 7.46 L 4.1 6.29 L 2.78 4.81 L 4.81 2.78 L 6.29 4.1 L 7.46 3.62 L 7.57 1.64 L 10.43 1.64 L 10.54 3.62 L 11.71 4.1 L 13.19 2.78 L 15.22 4.81 L 13.9 6.29 Z M 11.5 9 A 2.5 2.5 0 1 1 6.5 9 A 2.5 2.5 0 1 1 11.5 9";
+                    }
+                }
+
+                IconButton {
+                    enabled: root.shown;
+                    clicked => { WindowControls.toggle-fullscreen(); }
+
+                    Icon {
+                        stroke-commands: WindowControls.fullscreen
+                            ? "M 7 3 V 7 H 3 M 15 7 H 11 V 3 M 11 15 V 11 H 15 M 3 11 H 7 V 15"
+                            : "M 3 7 V 3 H 7 M 11 3 H 15 V 7 M 15 11 V 15 H 11 M 7 15 H 3 V 11";
+                    }
+                }
+            }
+        }
+    }
+}

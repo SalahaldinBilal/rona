@@ -1,0 +1,133 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+env:
+  CARGO_PACKAGER_VERSION: 0.11.8
+
+jobs:
+  check:
+    name: Check version
+    if: github.actor == 'SalahaldinBilal'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches the app version
+        if: github.ref_type == 'tag'
+        run: |
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match version $version in Cargo.toml. Run cargo xtask bump first."
+            exit 1
+          fi
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            runner: windows-latest
+            bundle: target/packager/*-setup.exe
+          # The AppImage runs on systems with this glibc or newer. 24.04 is the oldest Ubuntu whose libmpv is libmpv.so.2.
+          - name: linux
+            runner: ubuntu-24.04
+            bundle: target/packager/*.AppImage
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0-rust-${{ matrix.name }}"
+          cache-on-failure: true
+          cache-bin: true
+
+      - name: Install Linux build dependencies
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmpv-dev libfontconfig1-dev libxkbcommon-dev libgtk-3-dev libwayland-dev \
+            libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev file
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --version ${{ env.CARGO_PACKAGER_VERSION }} --locked
+
+      - name: Fetch libmpv
+        if: matrix.name == 'windows'
+        run: cargo xtask fetch-mpv
+
+      - name: Package
+        env:
+          # linuxdeploy is itself an AppImage, and the runner has no FUSE to mount it.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: cargo xtask package
+
+      - name: The AppImage starts and loads libmpv
+        if: matrix.name == 'linux'
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          appimage=$(ls target/packager/*.AppImage)
+          chmod +x "$appimage"
+          "$appimage" --version
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.name }}
+          path: ${{ matrix.bundle }}
+          retention-days: 1
+
+  deploy:
+    name: Deploy
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          path: bundles
+
+      - name: Install B2 CLI
+        run: pip install b2
+
+      - name: Deploy
+        env:
+          B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          RONA_SIGN_KEY: ${{ secrets.RONA_SIGN_KEY }}
+          RONA_SIGN_PASSWORD: ${{ secrets.RONA_SIGN_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo xtask deploy
+
+  stable:
+    name: Move stable branch
+    needs: deploy
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fast-forward stable to the tag
+        run: git push origin HEAD:refs/heads/stable

@@ -1,0 +1,9 @@
+import { Theme } from "../theme.slint";
+
+// Marks something that needs attention, like a waiting update.
+export component Dot inherits Rectangle {
+    width: 7px;
+    height: 7px;
+    border-radius: self.width / 2;
+    background: Theme.warning;
+}

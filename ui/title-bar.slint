@@ -1,0 +1,113 @@
+import { Theme } from "theme.slint";
+import { Player, WindowControls, Panels } from "state.slint";
+import { Icon } from "components/icon.slint";
+import { WindowButton } from "components/buttons.slint";
+
+export component TitleBar inherits TouchArea {
+    property <bool> shown: !WindowControls.fullscreen || root.has-hover;
+
+    height: Theme.title-height;
+    changed mouse-x => { WindowControls.activity(); }
+    changed mouse-y => { WindowControls.activity(); }
+    moved => {
+        if (!WindowControls.fullscreen) {
+            WindowControls.start-drag();
+        }
+    }
+    double-clicked => {
+        if (!WindowControls.fullscreen) {
+            WindowControls.toggle-maximize();
+        }
+    }
+    clicked => { Panels.focus-requests += 1; }
+
+    Rectangle {
+        background: Theme.chrome;
+        opacity: root.shown ? 1 : 0;
+        animate opacity { duration: 50ms; easing: ease-out; }
+
+        Rectangle {
+            y: parent.height - 1px;
+            height: 1px;
+            background: Theme.line;
+        }
+
+        HorizontalLayout {
+            padding-left: 10px;
+            spacing: 8px;
+
+            VerticalLayout {
+                alignment: center;
+
+                Image {
+                    width: 16px;
+                    height: 16px;
+                    source: @image-url("../assets/title-icon.svg");
+                }
+            }
+
+            Text {
+                horizontal-stretch: 1;
+                text: Player.media-title != "" ? Player.media-title : "Rona";
+                color: Player.media-title != "" ? Theme.text : Theme.muted;
+                font-size: 13px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            HorizontalLayout {
+                WindowButton {
+                    enabled: root.shown;
+                    clicked => { WindowControls.toggle-pin(); }
+
+                    Icon {
+                        width: 11px;
+                        height: 11px;
+                        viewbox: 12;
+                        tint: WindowControls.pinned ? Theme.accent : Theme.text;
+                        stroke-commands: "M 4 1 H 8 M 5 1 V 5 L 3 7 H 9 L 7 5 V 1 M 6 7 V 11";
+                    }
+                }
+
+                WindowButton {
+                    enabled: root.shown;
+                    clicked => { WindowControls.minimize(); }
+
+                    Icon {
+                        width: 11px;
+                        height: 11px;
+                        viewbox: 12;
+                        stroke-commands: "M 1 6.5 H 11";
+                    }
+                }
+
+                WindowButton {
+                    enabled: root.shown;
+                    clicked => { WindowControls.toggle-maximize(); }
+
+                    Icon {
+                        width: 11px;
+                        height: 11px;
+                        viewbox: 12;
+                        stroke-commands: WindowControls.maximized
+                            ? "M 3.5 3.5 V 1.5 H 10.5 V 8.5 H 8.5 M 1.5 3.5 H 8.5 V 10.5 H 1.5 Z"
+                            : "M 1.5 1.5 H 10.5 V 10.5 H 1.5 Z";
+                    }
+                }
+
+                WindowButton {
+                    enabled: root.shown;
+                    hover-color: Theme.danger;
+                    clicked => { WindowControls.close(); }
+
+                    Icon {
+                        width: 11px;
+                        height: 11px;
+                        viewbox: 12;
+                        stroke-commands: "M 1.5 1.5 L 10.5 10.5 M 10.5 1.5 L 1.5 10.5";
+                    }
+                }
+            }
+        }
+    }
+}

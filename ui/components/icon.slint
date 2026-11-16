@@ -1,0 +1,29 @@
+import { Theme } from "../theme.slint";
+
+export component Icon inherits Rectangle {
+    in property <string> stroke-commands;
+    in property <string> fill-commands;
+    in property <color> tint: Theme.text;
+    in property <float> viewbox: 18;
+    width: 17px;
+    height: 17px;
+
+    if root.fill-commands != "": Path {
+        width: root.width;
+        height: root.height;
+        viewbox-width: root.viewbox;
+        viewbox-height: root.viewbox;
+        commands: root.fill-commands;
+        fill: root.tint;
+    }
+
+    if root.stroke-commands != "": Path {
+        width: root.width;
+        height: root.height;
+        viewbox-width: root.viewbox;
+        viewbox-height: root.viewbox;
+        commands: root.stroke-commands;
+        stroke: root.tint;
+        stroke-width: 1.6px;
+    }
+}

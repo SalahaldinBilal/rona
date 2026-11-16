@@ -1,0 +1,118 @@
+import { Theme } from "theme.slint";
+import { Player, Phase } from "state.slint";
+import { TextButton } from "components/form.slint";
+import { Delayed, Spinner, SlidingBar } from "components/progress.slint";
+
+export component CheckingScreen inherits Delayed {
+    show: Player.phase == Phase.checking;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 6px;
+        padding-left: 24px;
+        padding-right: 24px;
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 10px;
+
+            VerticalLayout {
+                alignment: center;
+
+                if root.show: Spinner {}
+            }
+
+            Text {
+                text: "Checking link";
+                color: Theme.text;
+                font-size: 15px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: Player.place;
+            color: Theme.muted;
+            font-size: 12px;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 14px;
+
+            TextButton {
+                text: "Cancel";
+                ghost: true;
+                clicked => { Player.cancel-loading(); }
+            }
+        }
+    }
+}
+
+export component OpeningScreen inherits Delayed {
+    property <bool> slow: Player.slow-seconds > 0;
+
+    show: Player.phase == Phase.opening;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 6px;
+        padding-left: 24px;
+        padding-right: 24px;
+
+        Text {
+            text: Player.opening-name;
+            color: Theme.text;
+            font-size: 15px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+
+        if Player.place != "": Text {
+            text: Player.place;
+            color: Theme.muted;
+            font-size: 12px;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 12px;
+            padding-bottom: 6px;
+
+            SlidingBar {
+                width: 200px;
+                running: root.show;
+            }
+        }
+
+        if Player.source-is-link: Text {
+            text: root.slow ? "No response for " + Player.slow-seconds + " s" : Player.opening-stage;
+            color: Theme.muted;
+            font-size: 12px;
+            horizontal-alignment: center;
+        }
+
+        if Player.source-is-link: HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            padding-top: 8px;
+
+            if root.slow: TextButton {
+                text: "Retry";
+                clicked => { Player.retry-loading(); }
+            }
+
+            TextButton {
+                text: "Cancel";
+                ghost: true;
+                clicked => { Player.cancel-loading(); }
+            }
+        }
+    }
+}

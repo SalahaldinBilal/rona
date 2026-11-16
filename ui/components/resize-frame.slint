@@ -1,0 +1,77 @@
+import { ResizeEdge, WindowControls } from "../state.slint";
+
+component ResizeHandle inherits TouchArea {
+    in property <ResizeEdge> edge;
+
+    pointer-event(event) => {
+        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+            WindowControls.start-resize(root.edge);
+        }
+    }
+}
+
+export component ResizeFrame inherits Rectangle {
+    property <length> edge-size: 5px;
+    property <length> corner-size: 12px;
+
+    ResizeHandle {
+        x: 0;
+        y: 0;
+        height: root.edge-size;
+        edge: ResizeEdge.north;
+        mouse-cursor: MouseCursor.ns-resize;
+    }
+    ResizeHandle {
+        x: 0;
+        y: root.height - self.height;
+        height: root.edge-size;
+        edge: ResizeEdge.south;
+        mouse-cursor: MouseCursor.ns-resize;
+    }
+    ResizeHandle {
+        x: 0;
+        y: 0;
+        width: root.edge-size;
+        edge: ResizeEdge.west;
+        mouse-cursor: MouseCursor.ew-resize;
+    }
+    ResizeHandle {
+        x: root.width - self.width;
+        y: 0;
+        width: root.edge-size;
+        edge: ResizeEdge.east;
+        mouse-cursor: MouseCursor.ew-resize;
+    }
+    ResizeHandle {
+        x: 0;
+        y: 0;
+        width: root.corner-size;
+        height: root.corner-size;
+        edge: ResizeEdge.north-west;
+        mouse-cursor: MouseCursor.nwse-resize;
+    }
+    ResizeHandle {
+        x: root.width - self.width;
+        y: 0;
+        width: root.corner-size;
+        height: root.corner-size;
+        edge: ResizeEdge.north-east;
+        mouse-cursor: MouseCursor.nesw-resize;
+    }
+    ResizeHandle {
+        x: 0;
+        y: root.height - self.height;
+        width: root.corner-size;
+        height: root.corner-size;
+        edge: ResizeEdge.south-west;
+        mouse-cursor: MouseCursor.nesw-resize;
+    }
+    ResizeHandle {
+        x: root.width - self.width;
+        y: root.height - self.height;
+        width: root.corner-size;
+        height: root.corner-size;
+        edge: ResizeEdge.south-east;
+        mouse-cursor: MouseCursor.nwse-resize;
+    }
+}

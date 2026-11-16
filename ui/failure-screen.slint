@@ -1,0 +1,83 @@
+import { Theme } from "theme.slint";
+import { Player, Phase, FailureKind } from "state.slint";
+import { TextButton } from "components/form.slint";
+import { BigIcon, Glyphs } from "components/screen-parts.slint";
+
+export component FailureScreen inherits Rectangle {
+    property <FailureKind> kind: Player.failure-kind;
+
+    visible: Player.phase == Phase.failed;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 6px;
+        padding-left: 24px;
+        padding-right: 24px;
+
+        HorizontalLayout {
+            alignment: center;
+            padding-bottom: 10px;
+
+            BigIcon {
+                commands: root.kind == FailureKind.not-found
+                    ? Glyphs.file-missing
+                    : root.kind == FailureKind.unsupported
+                        ? Glyphs.warning
+                        : root.kind == FailureKind.network ? Glyphs.no-network : Glyphs.file-unknown;
+                tint: Theme.danger;
+                tone: #e5484d29;
+            }
+        }
+
+        Text {
+            text: Player.failure-title;
+            color: Theme.text;
+            font-size: 17px;
+            font-weight: 600;
+            horizontal-alignment: center;
+        }
+
+        HorizontalLayout {
+            alignment: center;
+
+            Text {
+                width: min(520px, root.width - 48px);
+                text: Player.failure-detail;
+                color: Theme.muted;
+                font-size: 13px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            padding-top: 14px;
+
+            if root.kind == FailureKind.network: TextButton {
+                text: "Retry";
+                primary: true;
+                clicked => { Player.retry-loading(); }
+            }
+
+            if root.kind == FailureKind.not-found || root.kind == FailureKind.unsupported: TextButton {
+                text: "Open file";
+                primary: true;
+                clicked => { Player.open-file(); }
+            }
+
+            if root.kind == FailureKind.network || root.kind == FailureKind.not-playable: TextButton {
+                text: "Open another link";
+                primary: root.kind == FailureKind.not-playable;
+                clicked => { Player.show-link-box(); }
+            }
+
+            TextButton {
+                text: "Close";
+                ghost: true;
+                clicked => { Player.close-file(); }
+            }
+        }
+    }
+}

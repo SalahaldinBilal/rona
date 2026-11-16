@@ -1,0 +1,44 @@
+import { Theme } from "../theme.slint";
+import { Clickable } from "clickable.slint";
+
+export component IconButton inherits Rectangle {
+    in property <bool> enabled: true;
+    in property <length> highlight-height: 34px;
+    callback clicked();
+
+    width: 34px;
+    height: 36px;
+
+    Rectangle {
+        width: root.width;
+        height: root.highlight-height;
+        border-radius: self.height / 2;
+        background: area.pressed ? Theme.pressed : area.has-hover ? Theme.hover : transparent;
+        animate background { duration: Theme.hover-duration; }
+    }
+
+    @children
+
+    area := Clickable {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component WindowButton inherits Rectangle {
+    in property <bool> enabled: true;
+    in property <color> hover-color: Theme.hover;
+    callback clicked();
+
+    width: 44px;
+    height: Theme.title-height;
+    background: area.has-hover ? root.hover-color : transparent;
+    animate background { duration: Theme.hover-duration; }
+
+    @children
+
+    area := Clickable {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}

@@ -1,0 +1,254 @@
+export enum ResizeEdge { north, south, east, west, north-east, north-west, south-east, south-west }
+
+export enum Phase { idle, checking, opening, playing, failed }
+
+export enum FailureKind { not-found, unsupported, network, not-playable }
+
+export enum DragState { none, playable, not-playable }
+
+export struct TrackItem {
+    id: int,
+    label: string,
+    sublabel: string,
+    detail: string,
+    selected: bool,
+}
+
+export struct ChapterItem {
+    time: float,
+    title: string,
+}
+
+export struct LoadedRange {
+    start: float,
+    end: float,
+}
+
+export struct PlaylistItem {
+    title: string,
+    current: bool,
+    failed: bool,
+}
+
+export struct ShortcutItem {
+    action: string,
+    key: string,
+}
+
+export global Panels {
+    in-out property <bool> tracks-open;
+    in-out property <bool> playlist-open;
+    in-out property <bool> recorder-open;
+    in-out property <bool> settings-open;
+    in-out property <int> settings-page;
+    in-out property <bool> link-open;
+    in-out property <string> link-text;
+    in-out property <string> link-error;
+    // Bumped to hand keyboard focus back to the window, since clicks on TouchAreas never take it from a text field.
+    in-out property <int> focus-requests;
+    // The focused text field is under the pointer, so a press there keeps focus instead of leaving and coming back.
+    in-out property <bool> pointer-on-focused-field;
+}
+
+export global Recorder {
+    in-out property <string> folder;
+    in-out property <string> prefix;
+    in-out property <int> mode;
+    in-out property <int> split-mode;
+    in-out property <string> split-minutes: "60";
+    in-out property <string> split-megabytes: "500";
+    in-out property <int> container;
+    in-out property <int> video-codec;
+    in-out property <string> video-bitrate;
+    in-out property <int> size;
+    in-out property <int> audio-codec;
+    in-out property <int> audio-bitrate: 1;
+    in-out property <bool> burn-subtitles;
+
+    in property <bool> recording;
+    in property <bool> encoding;
+    in property <string> current-file;
+    in property <string> elapsed-text;
+    in property <string> size-text;
+    in property <string> status-text;
+
+    callback toggle-recording();
+    callback browse-folder();
+    callback open-folder();
+}
+
+export enum UpdatePhase { idle, checking, up-to-date, available, downloading, ready, failed }
+
+export global Updates {
+    in property <UpdatePhase> phase;
+    in property <string> current-version;
+    in property <string> new-version;
+    in property <string> notes;
+    in property <bool> has-release;
+    // From 0 to 1, below 0 while the size is unknown.
+    in property <float> progress: -1;
+    in property <string> error;
+    // False when this build can't replace itself, the page then points to the download site.
+    in property <bool> self-update;
+    in property <string> download-site;
+    // Shown when the check on startup finds an update, until it is closed or something plays.
+    in-out property <bool> banner-visible;
+
+    callback check();
+    callback install();
+    callback restart();
+}
+
+export global Settings {
+    in-out property <bool> resume;
+    in-out property <string> resume-days;
+    in-out property <float> start-volume;
+    in-out property <int> end-action;
+    in-out property <string> seek-short;
+    in-out property <string> seek-long;
+    in-out property <string> speed-steps;
+    in-out property <bool> skip-chapters;
+    in-out property <string> skip-chapter-titles;
+
+    in property <[string]> renderers;
+    in-out property <int> renderer;
+    in property <int> renderer-at-start;
+    in property <string> renderer-hint;
+    in-out property <int> hardware-decoding;
+    in-out property <int> scaling;
+    in-out property <bool> deband;
+    in-out property <int> aspect;
+
+    in-out property <string> audio-languages;
+    in-out property <int> volume-max;
+    in-out property <bool> normalize;
+    in-out property <int> audio-device;
+    in property <[string]> audio-devices;
+
+    in-out property <string> subtitle-languages;
+    in-out property <bool> subtitle-auto-load;
+    in-out property <bool> skip-matching-subtitles;
+    in-out property <string> subtitle-font;
+    in-out property <float> subtitle-size;
+    in-out property <color> subtitle-color;
+    in-out property <color> subtitle-border-color;
+    in-out property <float> subtitle-raise;
+    in-out property <bool> subtitle-override-styles;
+
+    in-out property <string> cache-size;
+    in-out property <string> read-ahead;
+    in-out property <string> connect-timeout;
+    in-out property <string> read-timeout;
+    in-out property <string> user-agent;
+
+    in-out property <bool> on-top-while-playing;
+    in-out property <bool> remember-window;
+    in-out property <int> double-click;
+    in-out property <string> hide-controls-after;
+    in-out property <string> osd-duration;
+
+    in property <[ShortcutItem]> shortcuts;
+    in-out property <int> capturing: -1;
+
+    in-out property <bool> check-updates;
+
+    callback changed();
+    pure callback valid-speeds(string) -> bool;
+    callback reset-page(int);
+    callback bind-key(int, string) -> bool;
+    callback refresh-audio-devices();
+}
+
+export global Player {
+    in property <bool> paused;
+    in property <float> position;
+    in property <float> duration;
+    in property <string> time-text: "0:00 / 0:00";
+    in property <string> media-title;
+    in property <float> volume: 1;
+    in property <float> volume-limit: 1;
+    in property <bool> muted;
+    in property <float> speed: 1;
+    in property <string> speed-text: "1x";
+    in property <bool> hardware-decoding;
+    in property <string> resolution-badge;
+    in property <string> video-badge;
+    in property <string> audio-badge;
+    in property <string> osd-text;
+    in property <bool> osd-visible;
+    in property <[TrackItem]> subtitle-tracks;
+    in property <[TrackItem]> audio-tracks;
+    in property <bool> subtitles-off: true;
+    in property <[PlaylistItem]> playlist;
+    in property <[LoadedRange]> loaded-ranges;
+    in property <[ChapterItem]> chapters;
+    in property <string> download-speed;
+    in property <bool> buffering;
+    in property <int> buffer-percent;
+    in property <bool> seeking;
+
+    in property <Phase> phase: Phase.idle;
+    in property <bool> ended;
+    in property <string> next-title;
+    // The file name, and its folder or the link's host, while checking or opening.
+    in property <string> opening-name;
+    in property <string> place;
+    in property <bool> source-is-link;
+    in property <string> opening-stage;
+    in property <int> slow-seconds;
+    in property <int> stalled-seconds;
+    in property <bool> connection-lost;
+    in property <int> retry-in;
+    in property <FailureKind> failure-kind;
+    in property <string> failure-title;
+    in property <string> failure-detail;
+    in property <bool> audio-only;
+    in property <bool> has-cover;
+    in property <string> audio-artist;
+    in property <string> audio-album;
+    in property <DragState> drag-state: DragState.none;
+    in property <string> drag-name;
+
+    callback toggle-pause();
+    callback seek(float);
+    callback seek-preview(float);
+    callback previous();
+    callback next();
+    callback toggle-mute();
+    callback set-volume(float);
+    callback change-volume(float);
+    callback cycle-speed();
+    callback key-pressed(string, bool) -> bool;
+    callback select-subtitle(int);
+    callback select-audio(int);
+    callback play-entry(int);
+    callback open-file();
+    callback show-link-box();
+    callback paste-link();
+    // Returns the message to show under the field, empty when the link was accepted.
+    callback open-link(string) -> string;
+    callback cancel-loading();
+    callback retry-loading();
+    callback close-file();
+    callback replay();
+    callback retry-connection();
+    pure callback format-time(float) -> string;
+    pure callback chapter-title-at(float) -> string;
+}
+
+export global WindowControls {
+    in property <bool> maximized;
+    in property <bool> fullscreen;
+    in property <bool> pinned;
+    in-out property <bool> pointer-active: true;
+
+    callback activity();
+    callback start-drag();
+    callback start-resize(ResizeEdge);
+    callback minimize();
+    callback toggle-maximize();
+    callback close();
+    callback toggle-fullscreen();
+    callback toggle-pin();
+    callback state-changed();
+}

@@ -1,0 +1,65 @@
+import { Theme } from "theme.slint";
+import { Player } from "state.slint";
+import { Icon } from "components/icon.slint";
+import { Clickable } from "components/clickable.slint";
+
+export component VolumeControl inherits TouchArea {
+    property <float> level: Player.muted ? 0 : max(0, min(1, Player.volume / Player.volume-limit));
+
+    width: root.has-hover ? 112px : 34px;
+    height: 36px;
+    animate width { duration: 160ms; easing: ease-out; }
+    scroll-event(event) => {
+        Player.change-volume(event.delta-y > 0 ? 0.05 : -0.05);
+        return accept;
+    }
+
+    Rectangle {
+        y: 1px;
+        height: 34px;
+        border-radius: 17px;
+        background: root.has-hover ? Theme.hover : transparent;
+        animate background { duration: Theme.hover-duration; }
+        clip: true;
+
+        Clickable {
+            x: 0;
+            width: 34px;
+            enabled: root.enabled;
+            clicked => { Player.toggle-mute(); }
+
+            Icon {
+                fill-commands: "M 2.5 6.5 H 5.5 L 9.5 3 V 15 L 5.5 11.5 H 2.5 Z";
+                stroke-commands: Player.muted
+                    ? "M 12 6.5 L 16 10.5 M 16 6.5 L 12 10.5"
+                    : "M 12 6.5 Q 13.5 9 12 11.5 M 14 4.5 Q 17 9 14 13.5";
+            }
+        }
+
+        slider := Clickable {
+            x: 34px;
+            width: 68px;
+            enabled: root.enabled;
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    Player.set-volume(max(0, min(1, self.mouse-x / self.width)) * Player.volume-limit);
+                }
+            }
+            moved => { Player.set-volume(max(0, min(1, self.mouse-x / self.width)) * Player.volume-limit); }
+
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                height: 4px;
+                border-radius: 2px;
+                background: #ffffff33;
+
+                Rectangle {
+                    x: 0;
+                    width: parent.width * root.level;
+                    border-radius: 2px;
+                    background: white;
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,108 @@
+import { Theme } from "../theme.slint";
+
+// Fades in after 250 ms, so short loads never flash anything.
+export component Delayed inherits Rectangle {
+    in property <bool> show;
+
+    opacity: 0;
+    visible: self.opacity > 0;
+
+    states [
+        showing when root.show: {
+            opacity: 1;
+            in {
+                animate opacity { delay: 250ms; duration: 150ms; easing: ease-out; }
+            }
+            out {
+                animate opacity { duration: 120ms; easing: ease-out; }
+            }
+        }
+    ]
+}
+
+component Arc inherits Path {
+    in property <length> size;
+    in property <length> thickness;
+    in property <angle> start-angle;
+    in property <angle> end-angle;
+    property <float> center: root.size / 1px / 2;
+    property <float> radius: (root.size - root.thickness) / 1px / 2;
+    property <int> large: root.end-angle - root.start-angle > 180deg ? 1 : 0;
+
+    width: root.size;
+    height: root.size;
+    viewbox-width: root.size / 1px;
+    viewbox-height: root.size / 1px;
+    stroke-width: root.thickness;
+    commands: "M " + (root.center + root.radius * cos(root.start-angle)) + " " + (root.center + root.radius * sin(root.start-angle))
+        + " A " + root.radius + " " + root.radius + " 0 " + root.large + " 1 "
+        + (root.center + root.radius * cos(root.end-angle)) + " " + (root.center + root.radius * sin(root.end-angle));
+}
+
+export component ProgressRing inherits Rectangle {
+    in property <length> size: 30px;
+    in property <length> thickness: 2.5px;
+    in property <float> fraction;
+    property <float> shown: max(0.001, min(0.999, root.fraction));
+
+    width: root.size;
+    height: root.size;
+
+    Arc {
+        size: root.size;
+        thickness: root.thickness;
+        start-angle: -90deg;
+        end-angle: 269.9deg;
+        stroke: #ffffff26;
+    }
+
+    Arc {
+        size: root.size;
+        thickness: root.thickness;
+        start-angle: -90deg;
+        end-angle: -90deg + 360deg * root.shown;
+        stroke: Theme.accent;
+    }
+}
+
+// Only create it while it's on screen, since animation-tick keeps the window redrawing.
+export component Spinner inherits Rectangle {
+    in property <length> size: 18px;
+    in property <length> thickness: 2px;
+    property <angle> turn: 360deg * mod(animation-tick(), 800ms) / 800ms;
+
+    width: root.size;
+    height: root.size;
+
+    Arc {
+        size: root.size;
+        thickness: root.thickness;
+        start-angle: -90deg;
+        end-angle: 269.9deg;
+        stroke: #ffffff26;
+    }
+
+    Arc {
+        size: root.size;
+        thickness: root.thickness;
+        start-angle: root.turn;
+        end-angle: root.turn + 100deg;
+        stroke: Theme.accent;
+    }
+}
+
+export component SlidingBar inherits Rectangle {
+    in property <bool> running: true;
+
+    height: 3px;
+    border-radius: 1.5px;
+    background: #ffffff26;
+    clip: true;
+
+    if root.running: Rectangle {
+        width: parent.width * 0.35;
+        x: parent.width * 1.35 * mod(animation-tick(), 1200ms) / 1200ms - self.width;
+        border-radius: 1.5px;
+        background: Theme.accent;
+    }
+}

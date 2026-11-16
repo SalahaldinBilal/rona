@@ -1,0 +1,360 @@
+import { Theme } from "theme.slint";
+import { Panels, Recorder } from "state.slint";
+import { Icon } from "components/icon.slint";
+import { IconButton } from "components/buttons.slint";
+import { TextField, Checkbox, Segmented, Select, TextButton } from "components/form.slint";
+
+component SectionHeading inherits Text {
+    color: Theme.muted;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+component LabeledRow inherits HorizontalLayout {
+    in property <string> label;
+    spacing: 10px;
+
+    Text {
+        width: 92px;
+        text: root.label;
+        color: Theme.muted;
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+
+    @children
+}
+
+component InfoText inherits Text {
+    color: Theme.muted;
+    font-size: 12px;
+    wrap: word-wrap;
+}
+
+export component RecorderPanel inherits Rectangle {
+    property <bool> locked: Recorder.recording || Recorder.encoding;
+
+    background: Theme.chrome;
+
+    TouchArea {
+        clicked => { Panels.focus-requests += 1; }
+    }
+
+    Rectangle {
+        x: 0;
+        width: 1px;
+        background: Theme.line;
+    }
+
+    VerticalLayout {
+        padding-left: 1px;
+
+        Rectangle {
+            height: 36px;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                spacing: 8px;
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: Recorder.recording ? Theme.danger : Theme.muted;
+                    }
+                }
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: "Recorder";
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+
+                IconButton {
+                    clicked => { Panels.recorder-open = false; }
+
+                    Icon {
+                        stroke-commands: "M 5 5 L 13 13 M 13 5 L 5 13";
+                    }
+                }
+            }
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+        }
+
+        list := Flickable {
+            vertical-stretch: 1;
+            content-height: content.preferred-height;
+
+            content := VerticalLayout {
+                width: list.width;
+                padding: 14px;
+                spacing: 10px;
+
+                SectionHeading { text: "STORAGE"; }
+
+                HorizontalLayout {
+                    spacing: 6px;
+
+                    TextField {
+                        horizontal-stretch: 1;
+                        text <=> Recorder.folder;
+                        placeholder: "Folder";
+                        enabled: !root.locked;
+                    }
+
+                    TextButton {
+                        width: 36px;
+                        height: 30px;
+                        text: "…";
+                        enabled: !root.locked;
+                        clicked => { Recorder.browse-folder(); }
+                    }
+                }
+
+                TextField {
+                    text <=> Recorder.prefix;
+                    placeholder: "Filename prefix (optional)";
+                    enabled: !root.locked;
+                }
+
+                Rectangle { height: 4px; }
+
+                SectionHeading { text: "MODE"; }
+
+                Segmented {
+                    options: ["Copy original", "Re-encode"];
+                    current-index <=> Recorder.mode;
+                    enabled: !root.locked;
+                }
+
+                if Recorder.mode == 0: VerticalLayout {
+                    spacing: 10px;
+
+                    InfoText {
+                        text: "Saves the video and audio exactly as they are, with no quality loss. Subtitles stay a separate track and are never drawn into the picture.";
+                    }
+
+                    LabeledRow {
+                        label: "Split files";
+
+                        Segmented {
+                            horizontal-stretch: 1;
+                            options: ["Off", "Minutes", "MB"];
+                            current-index <=> Recorder.split-mode;
+                            enabled: !root.locked;
+                        }
+                    }
+
+                    if Recorder.split-mode == 1: LabeledRow {
+                        label: "Every";
+
+                        TextField {
+                            horizontal-stretch: 1;
+                            text <=> Recorder.split-minutes;
+                            numeric: true;
+                            whole: true;
+                            positive: true;
+                            enabled: !root.locked;
+                        }
+
+                        Text {
+                            text: "minutes";
+                            color: Theme.muted;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    if Recorder.split-mode == 2: LabeledRow {
+                        label: "Every";
+
+                        TextField {
+                            horizontal-stretch: 1;
+                            text <=> Recorder.split-megabytes;
+                            numeric: true;
+                            whole: true;
+                            positive: true;
+                            enabled: !root.locked;
+                        }
+
+                        Text {
+                            text: "MB";
+                            color: Theme.muted;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                if Recorder.mode == 1: VerticalLayout {
+                    spacing: 10px;
+
+                    InfoText {
+                        text: "Encodes the recorded part with the settings below once you press Stop.";
+                    }
+
+                    LabeledRow {
+                        label: "Container";
+
+                        Select {
+                            horizontal-stretch: 1;
+                            options: ["MP4", "MKV"];
+                            current-index <=> Recorder.container;
+                            enabled: !root.locked;
+                        }
+                    }
+
+                    LabeledRow {
+                        label: "Video codec";
+
+                        Select {
+                            horizontal-stretch: 1;
+                            options: ["H.264", "H.265"];
+                            current-index <=> Recorder.video-codec;
+                            enabled: !root.locked;
+                        }
+                    }
+
+                    LabeledRow {
+                        label: "Bitrate";
+
+                        TextField {
+                            horizontal-stretch: 1;
+                            text <=> Recorder.video-bitrate;
+                            placeholder: "Same as source";
+                            numeric: true;
+                            whole: true;
+                            positive: true;
+                            optional: true;
+                            enabled: !root.locked;
+                        }
+
+                        Text {
+                            text: "kbps";
+                            color: Theme.muted;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    LabeledRow {
+                        label: "Size";
+
+                        Select {
+                            horizontal-stretch: 1;
+                            options: ["Original", "1080p", "720p", "480p"];
+                            current-index <=> Recorder.size;
+                            enabled: !root.locked;
+                        }
+                    }
+
+                    LabeledRow {
+                        label: "Audio codec";
+
+                        Select {
+                            horizontal-stretch: 1;
+                            options: ["AAC", "Opus"];
+                            current-index <=> Recorder.audio-codec;
+                            enabled: !root.locked;
+                        }
+                    }
+
+                    LabeledRow {
+                        label: "Audio bitrate";
+
+                        Select {
+                            horizontal-stretch: 1;
+                            options: ["128 kbps", "192 kbps", "320 kbps"];
+                            current-index <=> Recorder.audio-bitrate;
+                            enabled: !root.locked;
+                        }
+                    }
+
+                    Checkbox {
+                        text: "Draw subtitles into the video";
+                        checked <=> Recorder.burn-subtitles;
+                        enabled: !root.locked;
+                    }
+                }
+
+                Rectangle { height: 4px; }
+
+                SectionHeading { text: "ACTIVITY"; }
+
+                LabeledRow {
+                    label: "File";
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: Recorder.current-file != "" ? Recorder.current-file : "-";
+                        color: Theme.text;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+
+                LabeledRow {
+                    label: "Time";
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: Recorder.elapsed-text != "" ? Recorder.elapsed-text : "-";
+                        color: Theme.text;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                LabeledRow {
+                    label: "Size";
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: Recorder.size-text != "" ? Recorder.size-text : "-";
+                        color: Theme.text;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if Recorder.status-text != "": InfoText {
+                    text: Recorder.status-text;
+                    color: Theme.text;
+                }
+
+                Rectangle { height: 4px; }
+
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    TextButton {
+                        horizontal-stretch: 1;
+                        text: "Open folder";
+                        clicked => { Recorder.open-folder(); }
+                    }
+
+                    TextButton {
+                        horizontal-stretch: 1;
+                        text: Recorder.recording ? "Stop" : "Start";
+                        primary: !Recorder.recording;
+                        danger: Recorder.recording;
+                        enabled: !Recorder.encoding;
+                        clicked => { Recorder.toggle-recording(); }
+                    }
+                }
+            }
+        }
+    }
+}

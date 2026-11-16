@@ -1,0 +1,95 @@
+import { Theme } from "theme.slint";
+import { Player, Phase } from "state.slint";
+import { Icon } from "components/icon.slint";
+import { TextButton } from "components/form.slint";
+import { Glyphs } from "components/screen-parts.slint";
+import { Clickable } from "components/clickable.slint";
+
+// Not shown for audio, where it would sit on the cover. The play button replays there.
+export component EndOverlay inherits Rectangle {
+    visible: Player.phase == Phase.playing && Player.ended && !Player.audio-only;
+    background: #00000080;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 6px;
+
+        HorizontalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: 56px;
+                height: 56px;
+                border-radius: 28px;
+                background: replay-area.pressed ? #ffffff3d : replay-area.has-hover ? #ffffff2e : #ffffff1f;
+                animate background { duration: Theme.hover-duration; }
+
+                Icon {
+                    width: 26px;
+                    height: 26px;
+                    viewbox: 24;
+                    stroke-commands: Glyphs.replay;
+                }
+
+                replay-area := Clickable {
+                    clicked => { Player.replay(); }
+                }
+            }
+        }
+
+        Text {
+            text: "Replay";
+            color: Theme.text;
+            font-size: 13px;
+            font-weight: 600;
+            horizontal-alignment: center;
+        }
+
+        if Player.next-title != "": HorizontalLayout {
+            alignment: center;
+            padding-top: 22px;
+
+            Rectangle {
+                width: 340px;
+                height: 56px;
+                border-radius: 10px;
+                background: #000000a6;
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 10px;
+                    spacing: 12px;
+
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+
+                        Text {
+                            text: "Up next";
+                            color: Theme.muted;
+                            font-size: 12px;
+                        }
+
+                        Text {
+                            text: Player.next-title;
+                            color: Theme.text;
+                            font-size: 13px;
+                            font-weight: 600;
+                            overflow: elide;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        TextButton {
+                            text: "Play next";
+                            primary: true;
+                            clicked => { Player.next(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

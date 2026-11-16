@@ -1,0 +1,73 @@
+import { Theme } from "theme.slint";
+import { Player, Phase } from "state.slint";
+import { Icon } from "components/icon.slint";
+import { Glyphs } from "components/screen-parts.slint";
+
+export global AudioLayout {
+    out property <length> info-gap: 18px;
+    out property <length> info-height: 62px;
+}
+
+// With cover art mpv draws the cover itself into the square, this only adds the tags under it.
+export component AudioView inherits Rectangle {
+    in property <length> cover-x;
+    in property <length> cover-y;
+    in property <length> cover-size;
+
+    visible: Player.phase == Phase.playing && Player.audio-only;
+
+    if !Player.has-cover: Rectangle {
+        x: root.cover-x;
+        y: root.cover-y;
+        width: root.cover-size;
+        height: root.cover-size;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.line;
+        background: #ffffff0a;
+
+        Icon {
+            width: 56px;
+            height: 56px;
+            viewbox: 24;
+            tint: #ffffff4d;
+            stroke-commands: Glyphs.note;
+        }
+    }
+
+    VerticalLayout {
+        x: 0;
+        y: root.cover-y + root.cover-size + AudioLayout.info-gap;
+        width: root.width;
+        height: AudioLayout.info-height;
+        alignment: start;
+        spacing: 2px;
+        padding-left: 24px;
+        padding-right: 24px;
+
+        Text {
+            text: Player.media-title;
+            color: Theme.text;
+            font-size: 17px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+
+        if Player.audio-artist != "": Text {
+            text: Player.audio-artist;
+            color: Theme.muted;
+            font-size: 13px;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+
+        if Player.audio-album != "": Text {
+            text: Player.audio-album;
+            color: Theme.muted;
+            font-size: 12px;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+}

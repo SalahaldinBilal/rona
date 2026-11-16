@@ -1,0 +1,279 @@
+import { Theme } from "theme.slint";
+import { Player, WindowControls, Panels, Settings, Updates, Phase } from "state.slint";
+import { TitleBar } from "title-bar.slint";
+import { ControlBar } from "control-bar.slint";
+import { TracksMenu } from "tracks-menu.slint";
+import { PlaylistPanel } from "playlist-panel.slint";
+import { StatusOverlay } from "status-overlay.slint";
+import { RecorderPanel } from "recorder-panel.slint";
+import { SettingsDialog } from "settings-dialog.slint";
+import { StartScreen, DropOverlay } from "start-screen.slint";
+import { CheckingScreen, OpeningScreen } from "load-screen.slint";
+import { FailureScreen } from "failure-screen.slint";
+import { AudioView, AudioLayout } from "audio-view.slint";
+import { EndOverlay } from "end-overlay.slint";
+import { LinkBox } from "link-box.slint";
+import { UpdateBanner } from "update-banner.slint";
+import { ResizeFrame } from "components/resize-frame.slint";
+
+export { Player, WindowControls, Panels, Recorder, Settings, Updates, UpdatePhase, ResizeEdge, Phase, FailureKind, DragState, TrackItem, PlaylistItem, LoadedRange, ChapterItem, ShortcutItem } from "state.slint";
+export component AppWindow inherits Window {
+    title: Player.media-title != "" ? Player.media-title : "Rona";
+    no-frame: true;
+    preferred-width: 1280px;
+    preferred-height: 720px + Theme.title-height + Theme.controls-height;
+    background: black;
+    forward-focus: keys;
+
+    property <length> playlist-width: 280px;
+    property <length> recorder-width: 320px;
+    property <length> side-panel-reveal: Panels.playlist-open
+        ? root.playlist-width
+        : Panels.recorder-open ? root.recorder-width : 0px;
+    animate side-panel-reveal { duration: 200ms; easing: ease-out; }
+    property <length> menu-offset: Panels.tracks-open ? 0px : 8px;
+    animate menu-offset { duration: 140ms; easing: ease-out; }
+
+    out property <length> video-width: max(0px, root.width - root.side-panel-reveal);
+    out property <length> video-y: WindowControls.fullscreen ? 0px : Theme.title-height;
+    out property <length> video-height: WindowControls.fullscreen
+        ? root.height
+        : max(0px, root.height - Theme.title-height - Theme.controls-height);
+
+    // Where an audio file's cover goes. Rust renders mpv into this square instead of the whole video area.
+    out property <length> cover-size: max(0px, min(
+        min(Player.has-cover ? 280px : 168px, root.video-width - 48px),
+        root.video-height - AudioLayout.info-gap - AudioLayout.info-height - 48px));
+    out property <length> cover-x: (root.video-width - root.cover-size) / 2;
+    out property <length> cover-y: root.video-y
+        + (root.video-height - root.cover-size - AudioLayout.info-gap - AudioLayout.info-height) / 2;
+
+    // The last frame of a previous file stays in mpv's buffer, so anything that isn't a picture hides it.
+    property <bool> hide-video: Player.phase != Phase.playing || (Player.audio-only && !Player.has-cover);
+
+    property <bool> playing: Player.phase == Phase.playing;
+    changed playing => {
+        if (self.playing) {
+            Updates.banner-visible = false;
+        }
+    }
+
+    property <int> focus-requests: Panels.focus-requests;
+    changed focus-requests => { keys.focus(); }
+
+    // Rust calls this on every mouse press before Slint handles it, so any click takes focus from a text field.
+    public function release-text-focus() {
+        if (!keys.has-focus && Settings.capturing < 0 && !Panels.pointer-on-focused-field) {
+            keys.focus();
+        }
+    }
+
+    changed width => { WindowControls.state-changed(); }
+    changed height => { WindowControls.state-changed(); }
+
+    keys := FocusScope {
+        focus-changed-event => {
+            if (self.has-focus) {
+                Panels.pointer-on-focused-field = false;
+            }
+        }
+        key-pressed(event) => {
+            if (event.text == Key.Escape && Panels.settings-open) {
+                Panels.settings-open = false;
+                return accept;
+            }
+            if (event.text == Key.Escape && Panels.tracks-open) {
+                Panels.tracks-open = false;
+                return accept;
+            }
+            if (event.text == Key.Escape && Panels.link-open) {
+                Panels.link-open = false;
+                return accept;
+            }
+            if (event.modifiers.control && !event.modifiers.alt && !event.modifiers.meta) {
+                if (event.text == "o" || event.text == "O") {
+                    Player.open-file();
+                    return accept;
+                }
+                if (event.text == "u" || event.text == "U") {
+                    Player.show-link-box();
+                    return accept;
+                }
+                if (event.text == "v" || event.text == "V") {
+                    Player.paste-link();
+                    return accept;
+                }
+            }
+            if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
+                return reject;
+            }
+            return Player.key-pressed(event.text, event.modifiers.shift) ? accept : reject;
+        }
+    }
+
+    TouchArea {
+        x: 0;
+        y: root.video-y;
+        width: root.video-width;
+        height: root.video-height;
+        mouse-cursor: WindowControls.pointer-active ? MouseCursor.default : MouseCursor.none;
+        changed mouse-x => { WindowControls.activity(); }
+        changed mouse-y => { WindowControls.activity(); }
+        clicked => {
+            keys.focus();
+            Panels.tracks-open = false;
+        }
+        double-clicked => {
+            if (Settings.double-click == 0) {
+                WindowControls.toggle-fullscreen();
+            }
+        }
+    }
+
+    if root.hide-video: Rectangle {
+        x: 0;
+        y: root.video-y;
+        width: root.video-width;
+        height: root.video-height;
+        background: black;
+    }
+
+    AudioView {
+        x: 0;
+        y: root.video-y;
+        width: root.video-width;
+        height: root.video-height;
+        cover-x: root.cover-x;
+        cover-y: root.cover-y - root.video-y;
+        cover-size: root.cover-size;
+    }
+
+    EndOverlay {
+        x: 0;
+        y: root.video-y;
+        width: root.video-width;
+        height: root.video-height;
+    }
+
+    StatusOverlay {
+        x: 0;
+        y: root.video-y;
+        width: root.video-width;
+        height: root.video-height;
+    }
+
+    StartScreen {
+        x: 0;
+        y: root.video-y;
+        width: root.video-width;
+        height: root.video-height;
+    }
+
+    CheckingScreen {
+        x: 0;
+        y: root.video-y;
+        width: root.video-width;
+        height: root.video-height;
+    }
+
+    OpeningScreen {
+        x: 0;
+        y: root.video-y;
+        width: root.video-width;
+        height: root.video-height;
+    }
+
+    FailureScreen {
+        x: 0;
+        y: root.video-y;
+        width: root.video-width;
+        height: root.video-height;
+    }
+
+    PlaylistPanel {
+        x: root.video-width;
+        y: root.video-y;
+        width: root.playlist-width;
+        height: root.video-height;
+        visible: Panels.playlist-open && root.side-panel-reveal > 0;
+    }
+
+    RecorderPanel {
+        x: root.video-width;
+        y: root.video-y;
+        width: root.recorder-width;
+        height: root.video-height;
+        visible: Panels.recorder-open && root.side-panel-reveal > 0;
+    }
+
+    Rectangle {
+        x: 12px;
+        y: root.video-y + 12px;
+        width: osd-label.preferred-width + 24px;
+        height: 28px;
+        border-radius: 6px;
+        background: #0000008c;
+        opacity: Player.osd-visible ? 1 : 0;
+        animate opacity { duration: 160ms; easing: ease-out; }
+
+        osd-label := Text {
+            text: Player.osd-text;
+            color: Theme.text;
+            font-size: 13px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+
+    UpdateBanner {
+        x: 0;
+        y: root.video-y;
+        width: root.width;
+    }
+
+    TitleBar {
+        y: 0;
+    }
+
+    controls := ControlBar {
+        y: root.height - self.height;
+    }
+
+    TracksMenu {
+        open: Panels.tracks-open;
+        available-height: controls.y - 6px - Theme.title-height - 8px;
+        x: max(8px, root.width - self.width - 116px);
+        y: controls.y - self.height - 6px + root.menu-offset;
+    }
+
+    // Dialogs stay created until they have faded out after closing.
+    property <float> link-fade: Panels.link-open ? 1 : 0;
+    animate link-fade { duration: Theme.fade-duration; easing: ease-out; }
+    property <float> settings-fade: Panels.settings-open ? 1 : 0;
+    animate settings-fade { duration: Theme.fade-duration; easing: ease-out; }
+
+    if Panels.link-open || root.link-fade > 0: LinkBox {
+        x: 0;
+        y: root.video-y;
+        width: root.width;
+        height: root.video-height;
+        opacity: root.link-fade;
+    }
+
+    if Panels.settings-open || root.settings-fade > 0: SettingsDialog {
+        x: 0;
+        y: root.video-y;
+        width: root.width;
+        height: root.video-height;
+        opacity: root.settings-fade;
+    }
+
+    DropOverlay {
+        x: 0;
+        y: root.video-y;
+        width: root.width;
+        height: root.video-height;
+    }
+
+    if !WindowControls.maximized && !WindowControls.fullscreen: ResizeFrame {}
+}
