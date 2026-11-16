@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+- `--new-instance` starts a separate window even while Rona is already open.
+
+### Changed
+- Opening a file while Rona is running plays it in the open window instead of starting a second one. Files opened together, like a selection in Explorer, become one playlist.
+- When some of the files or links you open can't be played, a message says how many were skipped.
+
+### Fixed
+- Several files on the command line all go into the playlist, not just the first. Links given together with files are no longer dropped.
+- A path that isn't valid Unicode no longer crashes Rona at startup. It shows File not found instead, since mpv only takes UTF-8 paths.
+
 ## [0.1.0] - 2026-11-17
 
 - Initial Release

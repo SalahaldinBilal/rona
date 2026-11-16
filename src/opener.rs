@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use slint::winit_030::winit::event::WindowEvent;
 use slint::winit_030::{EventResult, WinitWindowAccessor};
-use slint::{ComponentHandle, SharedString, Timer};
+use slint::{ComponentHandle, SharedString, Timer, TimerMode};
 
 use crate::http_cache::{self, ConnectionState};
 use crate::media::{self, FileCheck, LinkCheck};
@@ -18,6 +18,53 @@ use crate::{AppWindow, DragState, FailureKind, Osd, Panels, Phase, Player, log_e
 enum Source {
     File(PathBuf),
     Link(String),
+}
+
+enum Checked {
+    File(PathBuf, FileCheck),
+    Link(String, LinkCheck),
+}
+
+impl Checked {
+    fn playable(&self) -> Option<Source> {
+        match self {
+            Checked::File(path, FileCheck::Playable) => Some(Source::File(path.clone())),
+            Checked::Link(url, LinkCheck::Playable) => Some(Source::Link(url.clone())),
+            _ => None,
+        }
+    }
+}
+
+enum Pending<'scope> {
+    Ready(Source),
+    Checking(std::thread::ScopedJoinHandle<'scope, Checked>),
+}
+
+// Link checks wait on the network, so each gets its own thread while files are checked in order.
+fn check_sources(sources: Vec<Source>) -> Vec<Checked> {
+    std::thread::scope(|scope| {
+        let pending: Vec<Pending> = sources
+            .into_iter()
+            .map(|source| match source {
+                Source::Link(url) if !media::link_has_media_extension(&url) => Pending::Checking(scope.spawn(move || {
+                    let result = media::check_link(&url);
+                    Checked::Link(url, result)
+                })),
+                source => Pending::Ready(source),
+            })
+            .collect();
+        pending
+            .into_iter()
+            .map(|pending| match pending {
+                Pending::Ready(Source::File(path)) => {
+                    let check = media::check_file(&path);
+                    Checked::File(path, check)
+                }
+                Pending::Ready(Source::Link(url)) => Checked::Link(url, LinkCheck::Playable),
+                Pending::Checking(check) => check.join().expect("the link check panicked"),
+            })
+            .collect()
+    })
 }
 
 static FAILED: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -119,20 +166,65 @@ pub fn wire(app: &AppWindow, mpv: &Mpv, osd: &Osd, loader: Loader) {
     wire_drops(app);
 }
 
-pub fn open_argument(argument: &str) {
+fn is_link_argument(argument: &str) -> bool {
+    argument.contains("://")
+}
+
+/// Another launch hands its arguments over from its own working folder, so relative paths are resolved first.
+pub fn absolute_argument(argument: String) -> String {
+    if is_link_argument(&argument) {
+        return argument;
+    }
+    match std::path::absolute(&argument) {
+        Ok(path) => path.to_string_lossy().into_owned(),
+        Err(_) => argument,
+    }
+}
+
+// Explorer can start one process per selected file, so arguments that arrive close together open as one playlist.
+const ARGUMENT_BURST: Duration = Duration::from_millis(150);
+
+thread_local! {
+    static QUEUED_ARGUMENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static ARGUMENT_TIMER: Timer = Timer::default();
+}
+
+pub fn queue_arguments(arguments: Vec<String>) {
+    QUEUED_ARGUMENTS.with(|queued| queued.borrow_mut().extend(arguments));
+    ARGUMENT_TIMER.with(|timer| {
+        timer.start(TimerMode::SingleShot, ARGUMENT_BURST, || {
+            let arguments = QUEUED_ARGUMENTS.with(|queued| std::mem::take(&mut *queued.borrow_mut()));
+            open_arguments(&arguments);
+        });
+    });
+}
+
+// A bad link only gets the failure screen when nothing else was given.
+pub fn open_arguments(arguments: &[String]) {
     with_opener(|opener| {
-        let source = if argument.contains("://") {
+        let mut sources = Vec::new();
+        let mut bad_link = None;
+        let mut skipped = 0;
+        for argument in arguments {
+            if !is_link_argument(argument) {
+                sources.push(Source::File(PathBuf::from(argument)));
+                continue;
+            }
             match media::parse_link(argument) {
-                Ok(url) => Source::Link(url),
+                Ok(url) => sources.push(Source::Link(url)),
                 Err(err) => {
-                    opener.fail(FailureKind::NotPlayable, "Can't play this link", err.message(), argument, true);
-                    return;
+                    skipped += 1;
+                    bad_link.get_or_insert_with(|| (argument.clone(), err.message().to_string()));
                 }
             }
-        } else {
-            Source::File(PathBuf::from(argument))
-        };
-        opener.open(vec![source], false);
+        }
+        if sources.is_empty() {
+            if let Some((argument, detail)) = bad_link {
+                opener.fail(FailureKind::NotPlayable, "Can't play this link", &detail, &argument, true);
+            }
+            return;
+        }
+        opener.open_counting(sources, false, skipped);
     });
 }
 
@@ -151,6 +243,11 @@ pub fn playback_restarted() {
 
 impl Opener {
     fn open(&mut self, sources: Vec<Source>, quiet: bool) {
+        self.open_counting(sources, quiet, 0);
+    }
+
+    // `skipped` counts sources ruled out before this, so one message covers everything left out.
+    fn open_counting(&mut self, sources: Vec<Source>, quiet: bool, skipped: usize) {
         if sources.is_empty() {
             return;
         }
@@ -158,6 +255,7 @@ impl Opener {
         let generation = self.generation;
         self.last_request = sources.clone();
         if let [Source::Link(url)] = sources.as_slice() {
+            self.show_skipped(skipped, quiet);
             if media::link_has_media_extension(url) {
                 self.load(&sources);
             } else {
@@ -165,42 +263,49 @@ impl Opener {
             }
             return;
         }
-        let paths: Vec<PathBuf> = sources
-            .into_iter()
-            .filter_map(|source| match source {
-                Source::File(path) => Some(path),
-                Source::Link(_) => None,
-            })
-            .collect();
+        let link_to_check = sources.iter().find_map(|source| match source {
+            Source::Link(url) if !media::link_has_media_extension(url) => Some(url.clone()),
+            _ => None,
+        });
+        if let Some(url) = link_to_check {
+            self.show_checking(&url);
+        }
         std::thread::spawn(move || {
-            let checks: Vec<(PathBuf, FileCheck)> = paths
-                .into_iter()
-                .map(|path| {
-                    let check = media::check_file(&path);
-                    (path, check)
-                })
-                .collect();
+            let checks = check_sources(sources);
             let _ = slint::invoke_from_event_loop(move || {
-                with_opener(|opener| opener.files_checked(generation, checks, quiet));
+                with_opener(|opener| opener.sources_checked(generation, checks, quiet, skipped));
             });
         });
     }
 
-    fn files_checked(&mut self, generation: u64, checks: Vec<(PathBuf, FileCheck)>, quiet: bool) {
+    fn sources_checked(&mut self, generation: u64, checks: Vec<Checked>, quiet: bool, skipped: usize) {
         if generation != self.generation {
             return;
         }
-        let playable: Vec<Source> = checks
-            .iter()
-            .filter(|(_, check)| matches!(check, FileCheck::Playable))
-            .map(|(path, _)| Source::File(path.clone()))
-            .collect();
+        let playable: Vec<Source> = checks.iter().filter_map(Checked::playable).collect();
         if !playable.is_empty() {
+            self.show_skipped(skipped + checks.len() - playable.len(), quiet);
             self.load(&playable);
             return;
         }
-        let Some((path, check)) = checks.into_iter().next().filter(|_| !quiet) else { return };
-        let name = file_name(&path);
+        if quiet {
+            return;
+        }
+        match checks.into_iter().next() {
+            Some(Checked::File(path, check)) => self.file_failed(&path, check),
+            Some(Checked::Link(url, result)) => self.link_failed(&url, result),
+            None => {}
+        }
+    }
+
+    fn show_skipped(&self, skipped: usize, quiet: bool) {
+        if skipped > 0 && !quiet {
+            self.osd.show(format!("Skipped {skipped} that can't be played"));
+        }
+    }
+
+    fn file_failed(&self, path: &Path, check: FileCheck) {
+        let name = file_name(path);
         match check {
             FileCheck::NotFound => {
                 self.fail(FailureKind::NotFound, "File not found", &path.display().to_string(), &name, false)
@@ -216,19 +321,23 @@ impl Opener {
         }
     }
 
-    fn check_link(&mut self, url: String, generation: u64) {
+    fn show_checking(&self, url: &str) {
         let Some(app) = self.app.upgrade() else { return };
         let player = app.global::<Player>();
         if player.get_phase() == Phase::Playing {
             self.osd.show("Checking link");
-        } else {
-            if player.get_phase() == Phase::Opening {
-                log_error(self.mpv.command(&["stop"]));
-            }
-            player.set_place(media::without_scheme(&url).into());
-            player.set_media_title(media::link_host(&url).into());
-            player.set_phase(Phase::Checking);
+            return;
         }
+        if player.get_phase() == Phase::Opening {
+            log_error(self.mpv.command(&["stop"]));
+        }
+        player.set_place(media::without_scheme(url).into());
+        player.set_media_title(media::link_host(url).into());
+        player.set_phase(Phase::Checking);
+    }
+
+    fn check_link(&mut self, url: String, generation: u64) {
+        self.show_checking(&url);
         std::thread::spawn(move || {
             let result = media::check_link(&url);
             let _ = slint::invoke_from_event_loop(move || {
@@ -241,9 +350,16 @@ impl Opener {
         if generation != self.generation {
             return;
         }
-        let host = media::link_host(&url);
         match result {
             LinkCheck::Playable => self.load(&[Source::Link(url)]),
+            failure => self.link_failed(&url, failure),
+        }
+    }
+
+    fn link_failed(&self, url: &str, result: LinkCheck) {
+        let host = media::link_host(url);
+        match result {
+            LinkCheck::Playable => {}
             LinkCheck::NotPlayable(detail) => {
                 let detail = format!("{detail}.");
                 self.fail(FailureKind::NotPlayable, "Can't play this link", &detail, &host, true);

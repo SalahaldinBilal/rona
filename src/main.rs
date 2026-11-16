@@ -5,6 +5,7 @@ mod buffered;
 mod capture;
 mod chapter_skip;
 mod http_cache;
+mod instance;
 mod media;
 mod mpv;
 mod opener;
@@ -16,6 +17,8 @@ mod updater;
 mod video;
 #[cfg(windows)]
 mod video_d3d11;
+#[cfg(target_os = "linux")]
+mod wayland;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -37,6 +40,7 @@ use slint::{
 use http_cache::ConnectionState;
 use mpv::{Event, Mpv, Node, PropertyValue};
 use capture::Capture;
+use instance::Claim;
 use settings::SharedConfig;
 use video::{Area, Picture, VideoLayer};
 
@@ -147,16 +151,52 @@ impl Osd {
     }
 }
 
+// How long another launch waits for this window's UI thread to take its files.
+const HANDOVER_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Default)]
+struct Arguments {
+    version: bool,
+    new_instance: bool,
+    sources: Vec<String>,
+}
+
+// args_os, because args panics on a path that isn't valid Unicode.
+fn parse_arguments() -> Arguments {
+    let mut arguments = Arguments::default();
+    for argument in std::env::args_os().skip(1) {
+        let argument = argument.to_string_lossy().into_owned();
+        match argument.as_str() {
+            "--version" => arguments.version = true,
+            "--new-instance" => arguments.new_instance = true,
+            _ => arguments.sources.push(opener::absolute_argument(argument)),
+        }
+    }
+    arguments
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let argument = std::env::args().nth(1);
+    let arguments = parse_arguments();
     // Also starts mpv, so the release workflow can tell that a package finds libmpv and what it needs.
-    if argument.as_deref() == Some("--version") {
+    if arguments.version {
         attach_parent_console();
         println!("Rona {}", env!("CARGO_PKG_VERSION"));
         Mpv::new()?;
         println!("libmpv loaded");
         return Ok(());
     }
+
+    let capture = Capture::from_env();
+    // Claimed before anything slow, so files opened together all reach the same window.
+    let server = if arguments.new_instance || capture.is_some() {
+        None
+    } else {
+        match instance::claim(&arguments.sources) {
+            Claim::Forwarded => return Ok(()),
+            Claim::Primary(server) => Some(server),
+            Claim::Alone => None,
+        }
+    };
 
     // Slint picks OpenGL ES on Windows by default, where mpv renders 10-bit hardware decoded frames washed out.
     let backend = slint::BackendSelector::new().require_opengl();
@@ -172,7 +212,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let config: SharedConfig = Rc::new(RefCell::new(settings::load()));
-    let capture = Capture::from_env();
     let app = AppWindow::new()?;
     if capture.is_none() {
         settings::restore_window(&app, &config.borrow());
@@ -197,13 +236,61 @@ fn main() -> Result<(), Box<dyn Error>> {
     let _download_watch = watch_download(&app, &state);
     let _recorder = recorder::wire(&app, &mpv, state);
     updater::wire(&app, &config);
-    if let Some(argument) = argument {
-        opener::open_argument(&argument);
+    let listener = server.map(|server| {
+        let app_weak = app.as_weak();
+        instance::listen(server, move |launch| {
+            let (taken, was_taken) = std::sync::mpsc::channel();
+            // A hidden window is closing, so that launch opens its own window instead.
+            let queued = app_weak.upgrade_in_event_loop(move |app| {
+                let visible = app.window().is_visible();
+                if visible {
+                    bring_to_front(&app, launch.activation_token.as_deref());
+                    opener::queue_arguments(launch.sources);
+                }
+                let _ = taken.send(visible);
+            });
+            queued.is_ok() && was_taken.recv_timeout(HANDOVER_TIMEOUT).unwrap_or(false)
+        })
+    });
+    if listener.is_some() {
+        opener::queue_arguments(arguments.sources);
+    } else {
+        opener::open_arguments(&arguments.sources);
     }
 
     app.run()?;
+    if let Some(listener) = &listener {
+        listener.stop();
+    }
     updater::finish_pending_install();
     Ok(())
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+fn bring_to_front(app: &AppWindow, activation_token: Option<&str>) {
+    app.window().set_minimized(false);
+    app.window().with_winit_window(|window| {
+        window.focus_window();
+        #[cfg(target_os = "linux")]
+        if let Some(token) = activation_token {
+            activate_on_wayland(window, token);
+        }
+    });
+}
+
+#[cfg(target_os = "linux")]
+fn activate_on_wayland(window: &slint::winit_030::winit::window::Window, token: &str) {
+    use slint::winit_030::winit::raw_window_handle::{
+        HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
+    };
+    let (Ok(display), Ok(handle)) = (window.display_handle(), window.window_handle()) else { return };
+    let (RawDisplayHandle::Wayland(display), RawWindowHandle::Wayland(surface)) = (display.as_raw(), handle.as_raw())
+    else {
+        return;
+    };
+    if let Err(err) = wayland::activate(display.display, surface.surface, token) {
+        eprintln!("could not bring the window to the front: {err}");
+    }
 }
 
 // A release build has no console of its own, so output goes to the terminal that started it.
