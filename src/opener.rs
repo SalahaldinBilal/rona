@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use slint::winit_030::winit::event::WindowEvent;
-use slint::winit_030::{EventResult, WinitWindowAccessor};
 use slint::{ComponentHandle, SharedString, Timer, TimerMode};
 
 use crate::http_cache::{self, ConnectionState};
@@ -163,7 +162,6 @@ pub fn wire(app: &AppWindow, mpv: &Mpv, osd: &Osd, loader: Loader) {
     player.on_close_file(|| with_opener(Opener::close));
     player.on_replay(|| with_opener(Opener::replay));
     player.on_retry_connection(|| with_opener(Opener::retry_connection));
-    wire_drops(app);
 }
 
 fn is_link_argument(argument: &str) -> bool {
@@ -467,9 +465,17 @@ impl Opener {
         }
     }
 
-    // Anything that isn't a link is tried as a file path, and quietly ignored when it isn't a playable file.
+    // Files copied in a file manager come as a file list. Text that isn't a link is tried as a file path,
+    // and quietly ignored when it isn't a playable file.
     fn paste(&mut self) {
-        let Some(text) = clipboard_text() else { return };
+        let Ok(mut clipboard) = arboard::Clipboard::new() else { return };
+        if let Ok(files) = clipboard.get().file_list()
+            && !files.is_empty()
+        {
+            self.open(files.into_iter().map(Source::File).collect(), false);
+            return;
+        }
+        let Ok(text) = clipboard.get_text() else { return };
         if let Ok(url) = media::parse_link(&text) {
             self.open(vec![Source::Link(url)], false);
             return;
@@ -557,13 +563,14 @@ fn file_name(path: &Path) -> String {
     path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())
 }
 
+/// Handles file drags and drops. Slint keeps one winit event callback per window, so the window's single hook calls this.
 // winit sends one event per file, all in one go, so each burst is handled once on the next turn of the loop.
-fn wire_drops(app: &AppWindow) {
+pub fn drop_handler(app: &AppWindow) -> impl FnMut(&WindowEvent) + 'static {
     let hovered: Rc<RefCell<Vec<PathBuf>>> = Rc::default();
     let dropped: Rc<RefCell<Vec<PathBuf>>> = Rc::default();
     let hover_generation = Arc::new(AtomicU64::new(0));
     let app_weak = app.as_weak();
-    app.window().on_winit_window_event(move |_, event| {
+    move |event| {
         match event {
             WindowEvent::HoveredFile(path) => {
                 let first = hovered.borrow().is_empty();
@@ -599,8 +606,7 @@ fn wire_drops(app: &AppWindow) {
             }
             _ => {}
         }
-        EventResult::Propagate
-    });
+    }
 }
 
 fn check_hovered(paths: Vec<PathBuf>, app_weak: slint::Weak<AppWindow>, hover_generation: Arc<AtomicU64>) {

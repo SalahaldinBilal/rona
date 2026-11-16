@@ -1300,13 +1300,16 @@ fn update_window_level(app: &AppWindow) {
 fn wire_window_controls(app: &AppWindow, osd: &Osd, config: &SharedConfig) {
     let controls = app.global::<WindowControls>();
 
+    // Slint keeps only one winit event callback per window, so every handler goes through this one.
     let app_weak = app.as_weak();
+    let mut handle_drop = opener::drop_handler(app);
     app.window().on_winit_window_event(move |_, event| {
         if let WindowEvent::MouseInput { state: ElementState::Pressed, .. } = event
             && let Some(app) = app_weak.upgrade()
         {
             app.invoke_release_text_focus();
         }
+        handle_drop(event);
         EventResult::Propagate
     });
 

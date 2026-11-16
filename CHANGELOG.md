@@ -10,6 +10,8 @@
 - When some of the files or links you open can't be played, a message says how many were skipped.
 
 ### Fixed
+- Dragging files onto the window plays them again.
+- Ctrl+V plays files copied in Explorer or a file manager, not only copied paths and links.
 - Several files on the command line all go into the playlist, not just the first. Links given together with files are no longer dropped.
 - A path that isn't valid Unicode no longer crashes Rona at startup. It shows File not found instead, since mpv only takes UTF-8 paths.
 
