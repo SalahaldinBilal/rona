@@ -6,7 +6,7 @@ use slint::{Timer, TimerMode};
 
 use crate::media;
 use crate::mpv::Mpv;
-use crate::settings::{self, SharedConfig};
+use crate::state::{self, SharedState};
 use crate::log_error;
 
 // Turning the wheel changes the volume many times a second, so the file is written once it stops.
@@ -14,7 +14,7 @@ const SAVE_DELAY: Duration = Duration::from_secs(1);
 
 struct Volume {
     mpv: Mpv,
-    config: SharedConfig,
+    state: SharedState,
     // Whether the playing file uses the audio level rather than the video one.
     audio: Cell<bool>,
     save_timer: Timer,
@@ -31,8 +31,8 @@ fn with_volume(action: impl FnOnce(&Volume)) {
     }
 }
 
-pub fn wire(mpv: &Mpv, config: &SharedConfig) {
-    let volume = Volume { mpv: mpv.clone(), config: config.clone(), audio: Cell::new(false), save_timer: Timer::default() };
+pub fn wire(mpv: &Mpv, state: &SharedState) {
+    let volume = Volume { mpv: mpv.clone(), state: state.clone(), audio: Cell::new(false), save_timer: Timer::default() };
     volume.apply();
     VOLUME.with(|slot| *slot.borrow_mut() = Some(Rc::new(volume)));
 }
@@ -56,15 +56,15 @@ pub fn file_playing(audio_only: bool) {
 pub fn remember(percent: u32) {
     with_volume(|volume| {
         {
-            let mut config = volume.config.borrow_mut();
+            let mut state = volume.state.borrow_mut();
             if volume.audio.get() {
-                config.audio_volume = percent;
+                state.audio_volume = percent;
             } else {
-                config.video_volume = percent;
+                state.video_volume = percent;
             }
         }
-        let config = volume.config.clone();
-        volume.save_timer.start(TimerMode::SingleShot, SAVE_DELAY, move || settings::save(&config.borrow()));
+        let state = volume.state.clone();
+        volume.save_timer.start(TimerMode::SingleShot, SAVE_DELAY, move || state::save(&state.borrow()));
     });
 }
 
@@ -73,7 +73,7 @@ pub fn save_pending() {
     with_volume(|volume| {
         if volume.save_timer.running() {
             volume.save_timer.stop();
-            settings::save(&volume.config.borrow());
+            state::save(&volume.state.borrow());
         }
     });
 }
@@ -86,8 +86,8 @@ impl Volume {
 
     fn apply(&self) {
         let level = {
-            let config = self.config.borrow();
-            if self.audio.get() { config.audio_volume } else { config.video_volume }
+            let state = self.state.borrow();
+            if self.audio.get() { state.audio_volume } else { state.video_volume }
         };
         log_error(self.mpv.set_property("volume", &level.to_string()));
     }

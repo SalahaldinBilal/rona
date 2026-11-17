@@ -5,17 +5,17 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use slint::{Color, ComponentHandle, ModelRc, PhysicalPosition, PhysicalSize, SharedString, VecModel};
+use slint::{Color, ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::http_cache::{self, NetworkOptions};
 use crate::mpv::Mpv;
 use crate::shortcuts::{self, Action};
 use crate::video::Renderer;
-use crate::{AppWindow, Player, Settings as SettingsUi, ShortcutItem, WindowControls, log_error, update_window_level};
+use crate::{AppWindow, Player, Settings as SettingsUi, ShortcutItem, log_error, update_window_level};
 
 pub type SharedConfig = Rc<RefCell<Config>>;
 
-const FILE_NAME: &str = "settings.conf";
+pub const FILE_NAME: &str = "settings.conf";
 const AUTO_AUDIO_DEVICE: &str = "auto";
 const DEFAULT_SPEEDS: [f32; 6] = [1.0, 1.25, 1.5, 2.0, 0.5, 0.75];const END_ACTIONS: [&str; 3] = ["stop", "next", "loop"];
 const SCALING_CHOICES: [&str; 3] = ["fast", "balanced", "high"];
@@ -36,23 +36,11 @@ const DOUBLE_CLICK_CHOICES: [&str; 2] = ["fullscreen", "nothing"];
 const SUBTITLE_SIZES: (u32, u32) = (16, 80);
 const MAX_SUBTITLE_RAISE: u32 = 50;
 
-#[derive(Clone, Copy, PartialEq)]
-pub struct WindowGeometry {
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-    maximized: bool,
-}
-
 #[derive(Clone, PartialEq)]
 pub struct Config {
     pub resume: bool,
     pub resume_audio: bool,
     pub resume_days: u32,
-    // The last volume used for each kind of file, not shown in the dialog.
-    pub video_volume: u32,
-    pub audio_volume: u32,
     pub end_action: usize,
     pub seek_short: f64,
     pub seek_long: f64,
@@ -96,8 +84,6 @@ pub struct Config {
     pub shortcuts: Vec<String>,
 
     pub check_updates: bool,
-
-    window: Option<WindowGeometry>,
 }
 
 impl Default for Config {
@@ -106,8 +92,6 @@ impl Default for Config {
             resume: true,
             resume_audio: false,
             resume_days: 3,
-            video_volume: 100,
-            audio_volume: 100,
             end_action: 1,
             seek_short: 5.0,
             seek_long: 60.0,
@@ -151,8 +135,6 @@ impl Default for Config {
             shortcuts: Action::ALL.iter().map(|action| action.default_key()).collect(),
 
             check_updates: true,
-
-            window: None,
         }
     }
 }
@@ -284,8 +266,6 @@ impl Config {
             ("resume", yes_no(self.resume)),
             ("resume-audio", yes_no(self.resume_audio)),
             ("resume-days", self.resume_days.to_string()),
-            ("video-volume", self.video_volume.to_string()),
-            ("audio-volume", self.audio_volume.to_string()),
             ("end-action", END_ACTIONS[self.end_action].into()),
             ("seek-short", self.seek_short.to_string()),
             ("seek-long", self.seek_long.to_string()),
@@ -329,17 +309,6 @@ impl Config {
             let name = if key.is_empty() { String::new() } else { shortcuts::key_name(key) };
             entries.push((format!("shortcut.{}", action.config_name()), name));
         }
-        if let Some(window) = self.window {
-            let value = format!(
-                "{} {} {} {} {}",
-                window.x,
-                window.y,
-                window.width,
-                window.height,
-                yes_no(window.maximized)
-            );
-            entries.push(("window".into(), value));
-        }
         entries
     }
 
@@ -348,13 +317,6 @@ impl Config {
             "resume" => set_flag(&mut self.resume, value),
             "resume-audio" => set_flag(&mut self.resume_audio, value),
             "resume-days" => set_number(&mut self.resume_days, value, |days| *days > 0),
-            // Written by older versions, it seeds both remembered levels.
-            "start-volume" => {
-                set_number(&mut self.video_volume, value, is_volume);
-                set_number(&mut self.audio_volume, value, is_volume);
-            }
-            "video-volume" => set_number(&mut self.video_volume, value, is_volume),
-            "audio-volume" => set_number(&mut self.audio_volume, value, is_volume),
             "end-action" => set_choice(&mut self.end_action, value, &END_ACTIONS),
             "seek-short" => set_number(&mut self.seek_short, value, is_positive),
             "seek-long" => set_number(&mut self.seek_long, value, is_positive),
@@ -396,7 +358,6 @@ impl Config {
             "hide-controls-after" => set_number(&mut self.hide_controls_after, value, is_positive),
             "osd-duration" => set_number(&mut self.osd_duration, value, is_positive),
             "check-updates" => set_flag(&mut self.check_updates, value),
-            "window" => self.window = parse_window(value).or(self.window),
             _ => {
                 let Some(action) = name.strip_prefix("shortcut.") else { return };
                 let Some(index) = Action::ALL.iter().position(|known| known.config_name() == action) else {
@@ -412,7 +373,7 @@ impl Config {
     }
 }
 
-fn yes_no(flag: bool) -> String {
+pub fn yes_no(flag: bool) -> String {
     if flag { "yes" } else { "no" }.into()
 }
 
@@ -428,12 +389,7 @@ fn set_flag(field: &mut bool, value: &str) {
     }
 }
 
-// The highest volume limit is 200%.
-fn is_volume(volume: &u32) -> bool {
-    *volume <= 200
-}
-
-fn set_number<T: FromStr>(field: &mut T, value: &str, valid: impl Fn(&T) -> bool) {
+pub fn set_number<T: FromStr>(field: &mut T, value: &str, valid: impl Fn(&T) -> bool) {
     if let Some(number) = value.trim().parse::<T>().ok().filter(|number| valid(number)) {
         *field = number;
     }
@@ -478,18 +434,6 @@ fn speeds_text(speeds: &[f32]) -> String {
     speeds.iter().map(f32::to_string).collect::<Vec<_>>().join(", ")
 }
 
-fn parse_window(text: &str) -> Option<WindowGeometry> {
-    let parts: Vec<&str> = text.split_whitespace().collect();
-    let [x, y, width, height, maximized] = parts.as_slice() else { return None };
-    Some(WindowGeometry {
-        x: x.parse().ok()?,
-        y: y.parse().ok()?,
-        width: width.parse().ok().filter(|width| *width > 0)?,
-        height: height.parse().ok().filter(|height| *height > 0)?,
-        maximized: *maximized == "yes",
-    })
-}
-
 #[cfg(windows)]
 pub fn config_dir() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|dir| PathBuf::from(dir).join("rona"))
@@ -510,29 +454,38 @@ pub fn config_dir() -> Option<PathBuf> {
 
 pub fn load() -> Config {
     let mut config = Config::default();
-    let Some(path) = config_dir().map(|dir| dir.join(FILE_NAME)) else { return config };
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return config,
-        Err(err) => {
-            eprintln!("could not read {}: {err}", path.display());
-            return config;
-        }
-    };
-    for line in text.lines() {
-        if let Some((name, value)) = line.split_once('=') {
-            config.set(name.trim(), value.trim());
-        }
-    }
+    read_file(FILE_NAME, |name, value| config.set(name, value));
     config
 }
 
 pub fn save(config: &Config) {
+    write_file(FILE_NAME, &config.entries());
+}
+
+pub fn read_file(file_name: &str, mut set: impl FnMut(&str, &str)) {
+    let Some(path) = config_dir().map(|dir| dir.join(file_name)) else { return };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+        Err(err) => {
+            eprintln!("could not read {}: {err}", path.display());
+            return;
+        }
+    };
+    for line in text.lines() {
+        if let Some((name, value)) = line.split_once('=') {
+            set(name.trim(), value.trim());
+        }
+    }
+}
+
+pub fn write_file(file_name: &str, entries: &[(String, String)]) {
     let Some(dir) = config_dir() else { return };
-    let text: String = config.entries().iter().map(|(name, value)| format!("{name} = {value}\n")).collect();
-    let result = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join(FILE_NAME), text));
+    let text: String = entries.iter().map(|(name, value)| format!("{name} = {value}\n")).collect();
+    let path = dir.join(file_name);
+    let result = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, text));
     if let Err(err) = result {
-        eprintln!("could not save the settings to {}: {err}", dir.display());
+        eprintln!("could not write {}: {err}", path.display());
     }
 }
 
@@ -829,40 +782,4 @@ pub fn wire(mpv: &Mpv, app: &AppWindow, config: &SharedConfig) {
             refresh_audio_devices(&refresh_mpv, &app, &devices);
         }
     });
-}
-
-pub fn restore_window(app: &AppWindow, config: &Config) {
-    let Some(window) = config.window.filter(|_| config.remember_window) else { return };
-    app.window().set_size(PhysicalSize::new(window.width, window.height));
-    app.window().set_position(PhysicalPosition::new(window.x, window.y));
-    if window.maximized {
-        let app_weak = app.as_weak();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(app) = app_weak.upgrade() {
-                app.window().set_maximized(true);
-            }
-        });
-    }
-}
-
-pub fn remember_window(app: &AppWindow, config: &SharedConfig) {
-    let mut config = config.borrow_mut();
-    if !config.remember_window || app.global::<WindowControls>().get_fullscreen() {
-        return;
-    }
-    let window = app.window();
-    let (position, size) = (window.position(), window.size());
-    let current = WindowGeometry {
-        x: position.x,
-        y: position.y,
-        width: size.width,
-        height: size.height,
-        maximized: false,
-    };
-    config.window = Some(match (window.is_maximized(), config.window) {
-        (true, Some(previous)) => WindowGeometry { maximized: true, ..previous },
-        (true, None) => WindowGeometry { maximized: true, ..current },
-        (false, _) => current,
-    });
-    save(&config);
 }
