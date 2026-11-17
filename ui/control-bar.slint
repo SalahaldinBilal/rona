@@ -170,6 +170,17 @@ export component ControlBar inherits TouchArea {
                 IconButton {
                     enabled: root.usable;
                     opacity: root.dimmed;
+                    clicked => { Panels.tracks-open = !Panels.tracks-open; }
+
+                    Icon {
+                        tint: Panels.tracks-open ? Theme.accent : Theme.text;
+                        stroke-commands: "M 2 3.5 H 16 V 14.5 H 2 Z M 5 8 H 9 M 11 8 H 13 M 5 11 H 7 M 9 11 H 13";
+                    }
+                }
+
+                IconButton {
+                    enabled: root.usable;
+                    opacity: root.dimmed;
                     clicked => {
                         Panels.recorder-open = !Panels.recorder-open;
                         if (Panels.recorder-open) {
@@ -181,17 +192,6 @@ export component ControlBar inherits TouchArea {
                         tint: Recorder.recording ? Theme.danger : Panels.recorder-open ? Theme.accent : Theme.text;
                         fill-commands: Recorder.recording ? "M 9 4.5 A 4.5 4.5 0 1 1 9 13.5 A 4.5 4.5 0 1 1 9 4.5 Z" : "";
                         stroke-commands: Recorder.recording ? "" : "M 9 4.5 A 4.5 4.5 0 1 1 9 13.5 A 4.5 4.5 0 1 1 9 4.5 Z";
-                    }
-                }
-
-                IconButton {
-                    enabled: root.usable;
-                    opacity: root.dimmed;
-                    clicked => { Panels.tracks-open = !Panels.tracks-open; }
-
-                    Icon {
-                        tint: Panels.tracks-open ? Theme.accent : Theme.text;
-                        stroke-commands: "M 2 3.5 H 16 V 14.5 H 2 Z M 5 8 H 9 M 11 8 H 13 M 5 11 H 7 M 9 11 H 13";
                     }
                 }
 

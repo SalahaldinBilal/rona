@@ -32,6 +32,13 @@ export component AppWindow inherits Window {
         ? root.playlist-width
         : Panels.recorder-open ? root.recorder-width : 0px;
     animate side-panel-reveal { duration: 200ms; easing: ease-out; }
+    // Both flags are false while a panel slides out, so the last one opened stays drawn until it's gone.
+    property <bool> recorder-open: Panels.recorder-open;
+    property <bool> playlist-open: Panels.playlist-open;
+    property <bool> recorder-opened-last;
+    changed recorder-open => { if (self.recorder-open) { self.recorder-opened-last = true; } }
+    changed playlist-open => { if (self.playlist-open) { self.recorder-opened-last = false; } }
+    property <bool> recorder-side: Panels.recorder-open || (!Panels.playlist-open && root.recorder-opened-last);
     property <length> menu-offset: Panels.tracks-open ? 0px : 8px;
     animate menu-offset { duration: 140ms; easing: ease-out; }
 
@@ -199,20 +206,21 @@ export component AppWindow inherits Window {
         height: root.video-height;
     }
 
+    // Stretching to the reveal makes a switch to the narrower panel shrink from the left, with no gap on the right.
     PlaylistPanel {
         x: root.video-width;
         y: root.video-y;
-        width: root.playlist-width;
+        width: max(root.playlist-width, root.side-panel-reveal);
         height: root.video-height;
-        visible: Panels.playlist-open && root.side-panel-reveal > 0;
+        visible: !root.recorder-side && root.side-panel-reveal > 0;
     }
 
     RecorderPanel {
         x: root.video-width;
         y: root.video-y;
-        width: root.recorder-width;
+        width: max(root.recorder-width, root.side-panel-reveal);
         height: root.video-height;
-        visible: Panels.recorder-open && root.side-panel-reveal > 0;
+        visible: root.recorder-side && root.side-panel-reveal > 0;
     }
 
     Rectangle {
@@ -251,7 +259,7 @@ export component AppWindow inherits Window {
     TracksMenu {
         open: Panels.tracks-open;
         available-height: controls.y - 6px - Theme.title-height - 8px;
-        x: max(8px, root.width - self.width - 116px);
+        x: max(8px, root.width - self.width - 152px);
         y: controls.y - self.height - 6px + root.menu-offset;
     }
 
