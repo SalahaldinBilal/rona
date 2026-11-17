@@ -1374,18 +1374,18 @@ fn update_loading_status(player: &Player, state: &EventState) {
     player.set_opening_stage(stage.into());
     player.set_slow_seconds(slow as i32);
 
-    let playing_link = phase == Phase::Playing && link;
-    let stalled = if playing_link && player.get_buffering() {
-        http_cache::seconds_since_last_byte().filter(|seconds| *seconds >= STALLED_AFTER_SECS).unwrap_or(0)
+    // Reconnecting stays silent while playback goes on from mpv's buffer.
+    let waiting_on_link = phase == Phase::Playing && link && player.get_buffering();
+    let stalled = if waiting_on_link {
+        http_cache::seconds_without_data().filter(|seconds| *seconds >= STALLED_AFTER_SECS).unwrap_or(0)
     } else {
         0
     };
     player.set_stalled_seconds(stalled as i32);
     let (lost, retry_in) = match http_cache::connection_state() {
-        _ if !playing_link => (false, 0),
+        _ if !waiting_on_link => (false, 0),
         ConnectionState::Fine => (false, 0),
         ConnectionState::Retrying { seconds_left } => (true, seconds_left),
-        ConnectionState::GaveUp => (true, 0),
     };
     player.set_connection_lost(lost);
     player.set_retry_in(retry_in as i32);

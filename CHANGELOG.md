@@ -9,6 +9,8 @@
 - The remembered volume levels and the window's place and size are saved to `state.conf` instead of `settings.conf`, so the settings file only changes when you change a setting. Values saved by earlier versions carry over.
 
 ### Fixed
+- "Connection lost" no longer pops up during playback of a link that plays fine. When the server drops the connection while the buffer is full, Rona reconnects right away and only shows the message if playback has to wait. It also keeps trying instead of stopping after three attempts.
+- After a long stretch without downloading, "No data for N s" no longer counts that time and shows up right away on a seek.
 - A file you open now starts playing, even if the previous one was paused or the file was paused when you last left it.
 
 ## [0.1.1] - 2026-11-17

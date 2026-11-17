@@ -101,19 +101,20 @@ pub fn take_open_error() -> Option<String> {
     lock(&OPEN_ERROR).take()
 }
 
-static LAST_BYTE_AT: AtomicU64 = AtomicU64::new(0);
+static LAST_PROGRESS_AT: AtomicU64 = AtomicU64::new(0);
 
 fn clock_ms() -> u64 {
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
 }
 
-fn note_bytes_arrived() {
-    LAST_BYTE_AT.store(clock_ms(), Ordering::Relaxed);
+fn note_progress() {
+    LAST_PROGRESS_AT.store(clock_ms(), Ordering::Relaxed);
 }
 
-pub fn seconds_since_last_byte() -> Option<u64> {
-    match LAST_BYTE_AT.load(Ordering::Relaxed) {
+/// Time spent waiting on the network, not counting time mpv read nothing because its buffer was full.
+pub fn seconds_without_data() -> Option<u64> {
+    match LAST_PROGRESS_AT.load(Ordering::Relaxed) {
         0 => None,
         at => Some(clock_ms().saturating_sub(at) / 1000),
     }
@@ -122,12 +123,10 @@ pub fn seconds_since_last_byte() -> Option<u64> {
 pub enum ConnectionState {
     Fine,
     Retrying { seconds_left: u64 },
-    GaveUp,
 }
 
 const STATE_FINE: u8 = 0;
 const STATE_RETRYING: u8 = 1;
-const STATE_GAVE_UP: u8 = 2;
 
 static CONNECTION_STATE: AtomicU8 = AtomicU8::new(STATE_FINE);
 static RETRY_AT: AtomicU64 = AtomicU64::new(0);
@@ -139,7 +138,6 @@ pub fn connection_state() -> ConnectionState {
             let left = RETRY_AT.load(Ordering::Relaxed).saturating_sub(clock_ms());
             ConnectionState::Retrying { seconds_left: left.div_ceil(1000) }
         }
-        STATE_GAVE_UP => ConnectionState::GaveUp,
         _ => ConnectionState::Fine,
     }
 }
@@ -148,15 +146,15 @@ pub fn retry_now() {
     RETRY_REQUESTED.store(true, Ordering::Relaxed);
 }
 
-// Waits out a retry delay, or until the user asks, or forever when `delay` is None.
-fn wait_for_retry(delay: Option<Duration>, cancelled: &AtomicBool) -> Result<(), String> {
-    let until = delay.map(|delay| clock_ms() + delay.as_millis() as u64);
+// Waits out a retry delay, or until the user asks.
+fn wait_for_retry(delay: Duration, cancelled: &AtomicBool) -> Result<(), String> {
+    let until = clock_ms() + delay.as_millis() as u64;
     loop {
         if cancelled.load(Ordering::Relaxed) {
             CONNECTION_STATE.store(STATE_FINE, Ordering::Relaxed);
             return Err("cancelled".into());
         }
-        if RETRY_REQUESTED.swap(false, Ordering::Relaxed) || until.is_some_and(|until| clock_ms() >= until) {
+        if RETRY_REQUESTED.swap(false, Ordering::Relaxed) || clock_ms() >= until {
             return Ok(());
         }
         std::thread::sleep(RETRY_POLL);
@@ -296,7 +294,7 @@ impl HttpStream {
         let agent = agent();
         CONNECTION_STATE.store(STATE_FINE, Ordering::Relaxed);
         RETRY_REQUESTED.store(false, Ordering::Relaxed);
-        note_bytes_arrived();
+        note_progress();
         let response = range_request(&agent, url, 0)?;
         let (supports_ranges, size) = if response.status().as_u16() == 206 {
             (true, header(&response, "Content-Range").and_then(total_size))
@@ -339,20 +337,16 @@ impl HttpStream {
         Ok(count)
     }
 
-    // Playback goes on from mpv's buffer meanwhile. After the last delay it waits for the user's Retry.
+    // The usual failure is a connection the server closed while it sat idle, because mpv stops reading once its
+    // buffer is full. So the first attempt is immediate, then it keeps trying with the last delay.
     fn reconnect(&mut self, index: u64, cancelled: &AtomicBool) -> Result<Option<Arc<[u8]>>, String> {
+        let mut delay = None;
         let mut attempt = 0;
         loop {
-            match RETRY_DELAYS.get(attempt) {
-                Some(delay) => {
-                    RETRY_AT.store(clock_ms() + delay.as_millis() as u64, Ordering::Relaxed);
-                    CONNECTION_STATE.store(STATE_RETRYING, Ordering::Relaxed);
-                    wait_for_retry(Some(*delay), cancelled)?;
-                }
-                None => {
-                    CONNECTION_STATE.store(STATE_GAVE_UP, Ordering::Relaxed);
-                    wait_for_retry(None, cancelled)?;
-                }
+            if let Some(delay) = delay {
+                RETRY_AT.store(clock_ms() + delay.as_millis() as u64, Ordering::Relaxed);
+                CONNECTION_STATE.store(STATE_RETRYING, Ordering::Relaxed);
+                wait_for_retry(delay, cancelled)?;
             }
             self.connection = None;
             match self.chunk(index, cancelled) {
@@ -366,7 +360,8 @@ impl HttpStream {
                 }
                 Err(err) => {
                     eprintln!("reconnecting failed: {err}");
-                    attempt = (attempt + 1).min(RETRY_DELAYS.len());
+                    delay = Some(RETRY_DELAYS[attempt]);
+                    attempt = (attempt + 1).min(RETRY_DELAYS.len() - 1);
                 }
             }
         }
@@ -388,6 +383,7 @@ impl HttpStream {
         if self.size.is_some_and(|size| start >= size) {
             return Ok(None);
         }
+        note_progress();
         self.connect_at(start, cancelled)?;
         self.download_next_chunk(cancelled)
     }
@@ -433,10 +429,14 @@ impl HttpStream {
             let wanted = (CHUNK_SIZE as usize - data.len()).min(buffer.len());
             let read = connection.reader.read(&mut buffer[..wanted]).map_err(|err| err.to_string())?;
             if read == 0 {
+                // Cached as is, a chunk cut short would end the file early for mpv.
+                if self.size.is_some_and(|size| connection.position + (data.len() as u64) < size) {
+                    return Err("the server closed the connection before the end".into());
+                }
                 break;
             }
             DOWNLOADED_BYTES.fetch_add(read as u64, Ordering::Relaxed);
-            note_bytes_arrived();
+            note_progress();
             data.extend_from_slice(&buffer[..read]);
         }
         if data.is_empty() {

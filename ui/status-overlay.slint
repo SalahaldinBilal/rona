@@ -155,7 +155,7 @@ export component StatusOverlay inherits Rectangle {
             }
 
             Text {
-                text: Player.retry-in > 0 ? "Connection lost. Trying again in " + Player.retry-in + " s" : "Connection lost";
+                text: Player.retry-in > 0 ? "Connection lost. Trying again in " + Player.retry-in + " s" : "Connection lost. Trying again";
                 color: Theme.text;
                 font-size: 13px;
                 vertical-alignment: center;
