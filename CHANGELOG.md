@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-17
+
 ### Added
 - On Windows the installer registers Rona as a video and audio player. It shows up under Open with and in Settings > Apps > Default apps, without taking any file type from the app that has it, and uninstalling removes it again.
 - "Resume audio where I left off" setting, off by default. Resuming audio and video are now separate options, and audio starts from the beginning unless this one is on.
