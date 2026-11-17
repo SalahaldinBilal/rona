@@ -5,6 +5,7 @@ export component IconButton inherits Rectangle {
     in property <bool> enabled: true;
     in property <length> highlight-height: 34px;
     callback clicked();
+    callback right-clicked();
 
     width: 34px;
     height: 36px;
@@ -22,6 +23,11 @@ export component IconButton inherits Rectangle {
     area := Clickable {
         enabled: root.enabled;
         clicked => { root.clicked(); }
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up && self.has-hover) {
+                root.right-clicked();
+            }
+        }
     }
 }
 

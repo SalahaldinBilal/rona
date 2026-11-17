@@ -158,6 +158,7 @@ export component ControlBar inherits TouchArea {
                     enabled: root.usable;
                     opacity: root.dimmed;
                     clicked => { Player.cycle-speed(); }
+                    right-clicked => { Player.reset-speed(); }
 
                     Text {
                         text: Player.speed-text;

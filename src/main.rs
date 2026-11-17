@@ -1331,6 +1331,12 @@ fn wire_playback(mpv: &Mpv, app: &AppWindow, osd: &Osd, config: &SharedConfig) {
         speed_osd.show(format!("Speed {}", speed_label(next)));
     });
 
+    let (reset_mpv, reset_osd) = (mpv.clone(), osd.clone());
+    player.on_reset_speed(move || {
+        log_error(reset_mpv.command(&["set", "speed", "1"]));
+        reset_osd.show(format!("Speed {}", speed_label(1.0)));
+    });
+
     let (key_mpv, app_weak, key_config) = (mpv.clone(), app.as_weak(), config.clone());
     player.on_key_pressed(move |text, shift| {
         let Some(app) = app_weak.upgrade() else { return false };
