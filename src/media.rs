@@ -6,13 +6,7 @@ use ureq::ResponseExt;
 
 use crate::{http_cache, percent_decode};
 
-const VIDEO_EXTENSIONS: [&str; 24] = [
-    "mkv", "mk3d", "webm", "mp4", "m4v", "mov", "3gp", "3g2", "avi", "wmv", "asf", "flv", "f4v", "ts", "m2ts", "mts",
-    "mpg", "mpeg", "m2v", "vob", "ogv", "rm", "rmvb", "divx",
-];
-const AUDIO_EXTENSIONS: [&str; 17] = [
-    "mp3", "m4a", "m4b", "aac", "flac", "wav", "ogg", "oga", "opus", "wma", "mka", "ape", "wv", "aiff", "aif", "ac3", "dts",
-];
+use crate::extensions::{AUDIO_EXTENSIONS, VIDEO_EXTENSIONS};
 
 const SNIFF_BYTES: u64 = 4096;
 

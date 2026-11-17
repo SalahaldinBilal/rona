@@ -1,5 +1,8 @@
 mod changelog;
 mod deploy;
+#[cfg(windows)]
+#[path = "../../src/extensions.rs"]
+mod extensions;
 mod mpv;
 mod package;
 mod signing;
