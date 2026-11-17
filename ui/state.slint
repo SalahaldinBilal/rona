@@ -206,7 +206,12 @@ export global Player {
     // False until this file's track list is read, so audio-only and has-cover can't be trusted yet.
     in property <bool> tracks-known;
     in property <bool> audio-only;
+    // mpv draws this cover into the square. A pre-read cover (has-cover-image) is drawn by Slint and wins.
     in property <bool> has-cover;
+    in property <bool> has-cover-image;
+    in property <image> cover-image;
+    // The audio view's title, switched together with the tags and cover rather than as mpv reads it.
+    in property <string> audio-title;
     in property <string> audio-artist;
     in property <string> audio-album;
     in property <DragState> drag-state: DragState.none;

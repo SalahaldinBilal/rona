@@ -58,7 +58,9 @@ component PlaylistRow inherits Rectangle {
         }
     }
 
+    // Clicking the file that's already playing would restart it.
     area := Clickable {
+        enabled: !root.current;
         clicked => { root.clicked(); }
     }
 }

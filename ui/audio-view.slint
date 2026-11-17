@@ -8,13 +8,22 @@ export global AudioLayout {
     out property <length> info-height: 62px;
 }
 
-// With cover art mpv draws the cover itself into the square, this only adds the tags under it.
+// A pre-read cover is drawn here. Otherwise mpv draws its cover into the square itself, or the placeholder shows.
 export component AudioView inherits Rectangle {
     in property <length> cover-x;
     in property <length> cover-y;
     in property <length> cover-size;
 
-    if !Player.has-cover: Rectangle {
+    if Player.has-cover-image: Image {
+        x: root.cover-x;
+        y: root.cover-y;
+        width: root.cover-size;
+        height: root.cover-size;
+        source: Player.cover-image;
+        image-fit: contain;
+    }
+
+    if !Player.has-cover && !Player.has-cover-image: Rectangle {
         x: root.cover-x;
         y: root.cover-y;
         width: root.cover-size;
@@ -44,7 +53,7 @@ export component AudioView inherits Rectangle {
         padding-right: 24px;
 
         Text {
-            text: Player.media-title;
+            text: Player.audio-title;
             color: Theme.text;
             font-size: 17px;
             font-weight: 600;

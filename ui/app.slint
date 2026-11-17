@@ -42,7 +42,7 @@ export component AppWindow inherits Window {
 
     // Where an audio file's cover goes. Rust renders mpv into this square instead of the whole video area.
     out property <length> cover-size: max(0px, min(
-        min(Player.has-cover ? 280px : 168px, root.video-width - 48px),
+        min(Player.has-cover || Player.has-cover-image ? 280px : 168px, root.video-width - 48px),
         root.video-height - AudioLayout.info-gap - AudioLayout.info-height - 48px));
     out property <length> cover-x: (root.video-width - root.cover-size) / 2;
     out property <length> cover-y: root.video-y
@@ -55,7 +55,7 @@ export component AppWindow inherits Window {
     // The last frame of a previous file stays in mpv's buffer, so anything that isn't a picture hides it.
     // Until the track list is known, a file's first frame would show in the wrong place.
     property <bool> hide-video: root.audio-view-shown
-        ? !Player.has-cover
+        ? !Player.has-cover || Player.has-cover-image
         : Player.phase != Phase.playing || !Player.tracks-known;
 
     property <bool> playing: Player.phase == Phase.playing;

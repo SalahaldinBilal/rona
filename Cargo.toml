@@ -16,8 +16,9 @@ self-update = []
 arboard = { version = "3.7", default-features = false }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 glow = "0.18"
-image = { version = "0.25.10", default-features = false, features = ["png"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 libloading = "0.9.1"
+lofty = "0.25"
 minisign-verify = "0.2"
 rfd = "0.18"
 serde = { version = "1", features = ["derive"] }

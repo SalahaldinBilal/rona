@@ -1,6 +1,7 @@
 // Without it Windows opens a console window next to Rona. Debug builds keep the console for eprintln output.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod audio_info;
 mod buffered;
 mod capture;
 mod chapter_skip;
@@ -96,6 +97,8 @@ struct EventState {
     chapter_refresh: Arc<AtomicU64>,
     tag_refresh: Arc<AtomicU64>,
     path: Mutex<String>,
+    // The file whose pre-read info the audio view shows, so a file without it falls back to mpv's.
+    pre_read_path: Mutex<String>,
     file_format: Mutex<String>,
     dump_results: Mutex<Vec<Option<String>>>,
     byte_times: Mutex<buffered::ByteTimeMap>,
@@ -117,7 +120,14 @@ struct TrackLists {
 struct PlaylistRead {
     items: Vec<PlaylistItem>,
     next_title: String,
+    // The current file and its neighbors, nearest first, whose audio info is read ahead.
+    upcoming: Vec<String>,
+    files: Vec<String>,
 }
+
+// Next is where playback usually goes, previous is one key press away.
+const READ_AHEAD_NEXT: usize = 3;
+const READ_AHEAD_PREVIOUS: usize = 1;
 
 struct AudioTags {
     artist: String,
@@ -225,6 +235,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let state = Arc::new(EventState { capture: Mutex::new(capture), ..Default::default() });
     let osd = Osd::new(&app, &config);
     let loader = opener::Loader::default();
+    let (read_app, read_state, read_mpv) = (app.as_weak(), state.clone(), mpv.clone());
+    audio_info::start(move |read| {
+        let (state, mpv) = (read_state.clone(), read_mpv.clone());
+        let _ = read_app.upgrade_in_event_loop(move |app| {
+            if let audio_info::Read::Info(path) = &read {
+                show_pre_read(&app.global::<Player>(), &state, path);
+            }
+            // The playlist shows the titles that were just read.
+            read_in_background(&mpv, &app, &state.playlist_refresh, read_playlist, apply_playlist);
+        });
+    });
     forward_mpv_events(&mpv, &app, &state)?;
     let renderer = config.borrow().renderer();
     attach_video(&mpv, &app, loader.clone(), state.clone(), renderer)
@@ -376,8 +397,13 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                 }
             }
             Event::Hook { kind, id } => resume::handle_hook(mpv, kind, id),
+            // While opening, the audio view keeps its title until the file's info switches in all at once.
             Event::PropertyChange { id: MEDIA_TITLE, value } => {
-                player.set_media_title(readable_title(text(value)).into());
+                let title: SharedString = readable_title(text(value)).into();
+                if player.get_phase() == Phase::Playing {
+                    player.set_audio_title(title.clone());
+                }
+                player.set_media_title(title);
             }
             Event::PropertyChange { id: VOLUME, value } => {
                 player.set_volume((number(value).unwrap_or(0.0) / 100.0) as f32);
@@ -460,7 +486,14 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                     player.set_source_is_link(info.is_link);
                 }
                 if let Ok(mut current) = state.path.lock() {
-                    *current = path;
+                    current.clone_from(&path);
+                }
+                if audio_info::can_read(&path) {
+                    if audio_info::get(&path).is_some() {
+                        show_pre_read(&player, state, &path);
+                    } else {
+                        audio_info::read_next(&path);
+                    }
                 }
             }
             Event::PropertyChange { id: IDLE_ACTIVE, value: Some(PropertyValue::Flag(true)) } => {
@@ -474,8 +507,11 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
             Event::PropertyChange { id: EOF_REACHED, value: Some(PropertyValue::Flag(reached)) } => {
                 player.set_ended(reached);
             }
+            // mpv empties the tags while switching files, so they're only followed live once playing.
             Event::PropertyChange { id: METADATA, .. } => {
-                read_in_background(mpv, app, &state.tag_refresh, read_tags, apply_tags);
+                if player.get_phase() == Phase::Playing {
+                    read_in_background(mpv, app, &state.tag_refresh, read_tags, apply_tags);
+                }
             }
             Event::PropertyChange { id: VIDEO_BITRATE, value } => {
                 let bits = number(value).unwrap_or(0.0).max(0.0) as u64;
@@ -498,8 +534,8 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                 state.track_refresh.fetch_add(1, Ordering::SeqCst);
                 player.set_tracks_known(false);
                 if !continuing_audio {
-                    player.set_audio_only(false);
-                    player.set_has_cover(false);
+                    forget_audio_view(&player);
+                    player.set_audio_title(SharedString::new());
                     player.set_audio_artist(SharedString::new());
                     player.set_audio_album(SharedString::new());
                 }
@@ -521,7 +557,15 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
             }
             Event::PlaybackRestart => {
                 if player.get_phase() == Phase::Opening {
+                    // Without pre-read info the audio view switches to mpv's now that the file plays.
+                    let current = state.path.lock().map(|path| path.clone()).unwrap_or_default();
+                    let pre_read = state.pre_read_path.lock().is_ok_and(|shown| *shown == current);
+                    if !pre_read {
+                        player.set_has_cover_image(false);
+                        player.set_audio_title(player.get_media_title());
+                    }
                     player.set_phase(Phase::Playing);
+                    read_in_background(mpv, app, &state.tag_refresh, read_tags, apply_tags);
                     opener::playback_restarted();
                 } else if player.get_phase() == Phase::Playing {
                     resume::save_soon();
@@ -613,6 +657,27 @@ fn read_tracks(mpv: &Mpv) -> TrackLists {
 fn forget_audio_view(player: &Player) {
     player.set_audio_only(false);
     player.set_has_cover(false);
+    player.set_has_cover_image(false);
+}
+
+// Shows a file's pre-read info as soon as it's cached, all at once and usually while mpv is still opening it.
+fn show_pre_read(player: &Player, state: &EventState, path: &str) {
+    let current = state.path.lock().map(|current| current.clone()).unwrap_or_default();
+    if current != path || !matches!(player.get_phase(), Phase::Opening | Phase::Playing) {
+        return;
+    }
+    let Some(info) = audio_info::get(path) else { return };
+    player.set_audio_only(true);
+    player.set_has_cover_image(info.cover.is_some());
+    if let Some(cover) = &info.cover {
+        player.set_cover_image(slint::Image::from_rgba8(cover.clone()));
+    }
+    player.set_audio_title(info.title.clone().unwrap_or_else(|| file_display_name(path)).into());
+    player.set_audio_artist(info.artist.as_str().into());
+    player.set_audio_album(info.album_line.as_str().into());
+    if let Ok(mut shown) = state.pre_read_path.lock() {
+        *shown = path.to_string();
+    }
 }
 
 fn apply_tracks(player: &Player, tracks: TrackLists) {
@@ -712,30 +777,41 @@ fn read_playlist(mpv: &Mpv) -> PlaylistRead {
         .get_string("playlist/count")
         .and_then(|count| count.parse::<usize>().ok())
         .unwrap_or(0);
-    let items: Vec<PlaylistItem> = (0..count)
+    let (items, filenames): (Vec<PlaylistItem>, Vec<String>) = (0..count)
         .map(|index| {
             let field = |name: &str| mpv.get_string(&format!("playlist/{index}/{name}"));
             let filename = field("filename").unwrap_or_default();
+            // mpv only knows a file's title once it has played it, so the pre-read one fills in before that.
             let title = field("title")
                 .filter(|title| !title.is_empty())
+                .or_else(|| audio_info::title(&filename).flatten())
                 .unwrap_or_else(|| file_display_name(&filename));
-            PlaylistItem {
+            let item = PlaylistItem {
                 title: title.into(),
                 current: field("current").as_deref() == Some("yes"),
                 failed: opener::has_failed(&filename),
-            }
+            };
+            (item, filename)
         })
-        .collect();
-    let next_title = items
-        .iter()
-        .position(|item| item.current)
+        .unzip();
+    let current = items.iter().position(|item| item.current);
+    let next_title = current
         .and_then(|current| items.get(current + 1))
         .map(|item| item.title.to_string())
         .unwrap_or_default();
-    PlaylistRead { items, next_title }
+    let upcoming = current
+        .map(|current| {
+            let next = (current..filenames.len()).take(READ_AHEAD_NEXT + 1);
+            let previous = (0..current).rev().take(READ_AHEAD_PREVIOUS);
+            next.chain(previous).map(|index| filenames[index].clone()).collect()
+        })
+        .unwrap_or_default();
+    PlaylistRead { items, next_title, upcoming, files: filenames }
 }
 
 fn apply_playlist(player: &Player, playlist: PlaylistRead) {
+    audio_info::prefetch(playlist.upcoming);
+    audio_info::read_titles(&playlist.files);
     player.set_next_title(playlist.next_title.into());
     player.set_playlist(ModelRc::new(VecModel::from(playlist.items)));
 }
@@ -759,6 +835,9 @@ fn read_tags(mpv: &Mpv) -> AudioTags {
 }
 
 fn apply_tags(player: &Player, tags: AudioTags) {
+    if player.get_phase() != Phase::Playing {
+        return;
+    }
     player.set_audio_artist(tags.artist.into());
     player.set_audio_album(tags.album_line.into());
 }
@@ -1058,7 +1137,7 @@ fn attach_video(
                 let player = app.global::<Player>();
                 // Not tied to the phase, so mpv already renders the cover at its size behind the load screen.
                 // Between two audio files these still describe the previous one, so its cover keeps its square.
-                let showing_cover = player.get_audio_only() && player.get_has_cover();
+                let showing_cover = player.get_audio_only() && player.get_has_cover() && !player.get_has_cover_image();
                 // Until the new file's tracks are known its first frame could be anything, and until playback
                 // starts mpv may have no frame yet and would render black, so the old frame stays.
                 let hold_frame = !player.get_tracks_known() || player.get_phase() == Phase::Opening;

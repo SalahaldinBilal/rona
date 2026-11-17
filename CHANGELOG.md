@@ -11,8 +11,9 @@
 - When some of the files or links you open can't be played, a message says how many were skipped.
 
 ### Fixed
+- Clicking the playing file in the playlist no longer restarts it.
 - An audio file's cover no longer flashes at full size before shrinking to its place.
-- Moving from one audio file to the next updates the cover and tags in place instead of blanking the view for a moment.
+- Moving from one audio file to the next updates the cover and tags in place instead of blanking the view for a moment. Tags and covers of the files around the current one are read ahead, so the next file's info shows the moment it starts.
 - Dragging files onto the window plays them again.
 - Ctrl+V plays files copied in Explorer or a file manager, not only copied paths and links.
 - Several files on the command line all go into the playlist, not just the first. Links given together with files are no longer dropped.
