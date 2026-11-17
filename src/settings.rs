@@ -62,6 +62,7 @@ pub struct Config {
     pub subtitle_languages: String,
     pub subtitle_auto_load: bool,
     pub skip_matching_subtitles: bool,
+    pub unhide_subtitles: bool,
     pub subtitle_font: String,
     pub subtitle_size: u32,
     pub subtitle_color: String,
@@ -113,6 +114,7 @@ impl Default for Config {
             subtitle_languages: String::new(),
             subtitle_auto_load: true,
             skip_matching_subtitles: false,
+            unhide_subtitles: true,
             subtitle_font: String::new(),
             subtitle_size: 38,
             subtitle_color: "#ffffff".into(),
@@ -201,6 +203,7 @@ impl Config {
                 self.subtitle_languages = defaults.subtitle_languages;
                 self.subtitle_auto_load = defaults.subtitle_auto_load;
                 self.skip_matching_subtitles = defaults.skip_matching_subtitles;
+                self.unhide_subtitles = defaults.unhide_subtitles;
                 self.subtitle_font = defaults.subtitle_font;
                 self.subtitle_size = defaults.subtitle_size;
                 self.subtitle_color = defaults.subtitle_color;
@@ -284,6 +287,7 @@ impl Config {
             ("subtitle-languages", self.subtitle_languages.clone()),
             ("subtitle-auto-load", yes_no(self.subtitle_auto_load)),
             ("skip-matching-subtitles", yes_no(self.skip_matching_subtitles)),
+            ("unhide-subtitles", yes_no(self.unhide_subtitles)),
             ("subtitle-font", self.subtitle_font.clone()),
             ("subtitle-size", self.subtitle_size.to_string()),
             ("subtitle-color", self.subtitle_color.clone()),
@@ -339,6 +343,7 @@ impl Config {
             "subtitle-languages" => self.subtitle_languages = value.into(),
             "subtitle-auto-load" => set_flag(&mut self.subtitle_auto_load, value),
             "skip-matching-subtitles" => set_flag(&mut self.skip_matching_subtitles, value),
+            "unhide-subtitles" => set_flag(&mut self.unhide_subtitles, value),
             "subtitle-font" => self.subtitle_font = value.into(),
             "subtitle-size" => set_number(&mut self.subtitle_size, value, |size| {
                 (SUBTITLE_SIZES.0..=SUBTITLE_SIZES.1).contains(size)
@@ -588,6 +593,7 @@ fn write_ui(ui: &SettingsUi, config: &Config, devices: &[AudioDevice]) {
     ui.set_subtitle_languages(config.subtitle_languages.as_str().into());
     ui.set_subtitle_auto_load(config.subtitle_auto_load);
     ui.set_skip_matching_subtitles(config.skip_matching_subtitles);
+    ui.set_unhide_subtitles(config.unhide_subtitles);
     ui.set_subtitle_font(config.subtitle_font.as_str().into());
     ui.set_subtitle_size(config.subtitle_size as f32);
     ui.set_subtitle_color(parse_color(&config.subtitle_color).unwrap_or_default());
@@ -644,6 +650,7 @@ fn read_ui(ui: &SettingsUi, config: &mut Config, devices: &[AudioDevice]) {
     config.subtitle_languages = ui.get_subtitle_languages().trim().into();
     config.subtitle_auto_load = ui.get_subtitle_auto_load();
     config.skip_matching_subtitles = ui.get_skip_matching_subtitles();
+    config.unhide_subtitles = ui.get_unhide_subtitles();
     config.subtitle_font = ui.get_subtitle_font().trim().into();
     config.subtitle_size =
         (ui.get_subtitle_size().round() as u32).clamp(SUBTITLE_SIZES.0, SUBTITLE_SIZES.1);

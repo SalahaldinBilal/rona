@@ -334,6 +334,12 @@ component SubtitlesPage inherits Page {
         toggled => { Settings.changed(); }
     }
 
+    Checkbox {
+        text: "Show hidden subtitles again on the next file";
+        checked <=> Settings.unhide-subtitles;
+        toggled => { Settings.changed(); }
+    }
+
     Gap {}
     SectionHeading { text: "LOOK"; }
 

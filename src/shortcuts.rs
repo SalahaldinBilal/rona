@@ -19,11 +19,12 @@ pub enum Action {
     FrameForward,
     Next,
     Previous,
+    HideSubtitles,
     Record,
 }
 
 impl Action {
-    pub const ALL: [Action; 13] = [
+    pub const ALL: [Action; 14] = [
         Action::PlayPause,
         Action::SeekBack,
         Action::SeekForward,
@@ -36,6 +37,7 @@ impl Action {
         Action::FrameForward,
         Action::Next,
         Action::Previous,
+        Action::HideSubtitles,
         Action::Record,
     ];
 
@@ -53,6 +55,7 @@ impl Action {
             Action::FrameForward => "Next frame",
             Action::Next => "Next file",
             Action::Previous => "Previous file",
+            Action::HideSubtitles => "Hide or show subtitles",
             Action::Record => "Start or stop recording",
         }
     }
@@ -71,6 +74,7 @@ impl Action {
             Action::FrameForward => "frame-forward",
             Action::Next => "next",
             Action::Previous => "previous",
+            Action::HideSubtitles => "hide-subtitles",
             Action::Record => "record",
         }
     }
@@ -89,6 +93,7 @@ impl Action {
             Action::FrameForward => ".".into(),
             Action::Next => "n".into(),
             Action::Previous => "p".into(),
+            Action::HideSubtitles => "v".into(),
             Action::Record => "r".into(),
         }
     }
@@ -200,6 +205,7 @@ pub fn handle(text: &str, shift: bool, mpv: &Mpv, app: &AppWindow, config: &Shar
         Action::FrameForward => log_error(mpv.command(&["frame-step"])),
         Action::Next => player.invoke_next(),
         Action::Previous => player.invoke_previous(),
+        Action::HideSubtitles => player.invoke_toggle_subtitles(),
         Action::Record => app.global::<Recorder>().invoke_toggle_recording(),
     }
     true

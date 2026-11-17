@@ -172,7 +172,12 @@ impl Resume {
             .iter()
             .find(|entry| entry.key == key && policy.covers(entry.audio || media::is_audio_name(&key)))
             .map(|entry| entry.options.clone());
-        for (name, value) in saved.unwrap_or_default().into_iter().filter(|(name, _)| restored(name)) {
+        let unhide = self.config.borrow().unhide_subtitles;
+        if unhide {
+            log_error(self.mpv.set_property("sub-visibility", "yes"));
+        }
+        let kept = |name: &str| restored(name) && !(unhide && name == "sub-visibility");
+        for (name, value) in saved.unwrap_or_default().into_iter().filter(|(name, _)| kept(name)) {
             log_error(self.mpv.set_property(&format!("file-local-options/{name}"), &value));
         }
         let baseline = read_options(&self.mpv, &self.option_names);

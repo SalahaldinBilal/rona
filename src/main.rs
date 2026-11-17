@@ -78,6 +78,7 @@ const EOF_REACHED: u64 = 24;
 const METADATA: u64 = 25;
 const OSD_DIMENSIONS: u64 = 26;
 const CHAPTER: u64 = 27;
+const SUB_VISIBILITY: u64 = 28;
 
 #[cfg(target_os = "linux")]
 const APP_ID: &str = "rona";
@@ -337,6 +338,7 @@ fn observe_properties(mpv: &Mpv) -> Result<(), mpv::Error> {
     mpv.observe_string(MEDIA_TITLE, "media-title")?;
     mpv.observe_double(VOLUME, "volume")?;
     mpv.observe_flag(MUTE, "mute")?;
+    mpv.observe_flag(SUB_VISIBILITY, "sub-visibility")?;
     mpv.observe_double(SPEED, "speed")?;
     mpv.observe_string(HWDEC, "hwdec-current")?;
     mpv.observe_double(VIDEO_HEIGHT, "height")?;
@@ -421,6 +423,9 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
             }
             Event::PropertyChange { id: MUTE, value: Some(PropertyValue::Flag(muted)) } => {
                 player.set_muted(muted);
+            }
+            Event::PropertyChange { id: SUB_VISIBILITY, value: Some(PropertyValue::Flag(visible)) } => {
+                player.set_subtitles_hidden(!visible);
             }
             Event::PropertyChange { id: SPEED, value } => {
                 let speed = number(value).unwrap_or(1.0) as f32;
@@ -1255,6 +1260,16 @@ fn wire_playback(mpv: &Mpv, app: &AppWindow, osd: &Osd, config: &SharedConfig) {
     player.on_select_subtitle(move |id| {
         let id = if id == 0 { "no".to_string() } else { id.to_string() };
         log_error(subtitle_mpv.command(&["set", "sid", &id]));
+    });
+
+    let (hide_mpv, hide_osd, app_weak) = (mpv.clone(), osd.clone(), app.as_weak());
+    player.on_toggle_subtitles(move || {
+        let Some(app) = app_weak.upgrade() else { return };
+        let player = app.global::<Player>();
+        let hidden = !player.get_subtitles_hidden();
+        log_error(hide_mpv.command(&["set", "sub-visibility", if hidden { "no" } else { "yes" }]));
+        player.set_subtitles_hidden(hidden);
+        hide_osd.show(if hidden { "Subtitles hidden" } else { "Subtitles shown" });
     });
 
     let audio_mpv = mpv.clone();

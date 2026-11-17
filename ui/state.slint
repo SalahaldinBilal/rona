@@ -128,6 +128,7 @@ export global Settings {
     in-out property <string> subtitle-languages;
     in-out property <bool> subtitle-auto-load;
     in-out property <bool> skip-matching-subtitles;
+    in-out property <bool> unhide-subtitles;
     in-out property <string> subtitle-font;
     in-out property <float> subtitle-size;
     in-out property <color> subtitle-color;
@@ -179,6 +180,7 @@ export global Player {
     in property <[TrackItem]> subtitle-tracks;
     in property <[TrackItem]> audio-tracks;
     in property <bool> subtitles-off: true;
+    in property <bool> subtitles-hidden;
     in property <[PlaylistItem]> playlist;
     in property <[LoadedRange]> loaded-ranges;
     in property <[ChapterItem]> chapters;
@@ -227,6 +229,7 @@ export global Player {
     callback cycle-speed();
     callback key-pressed(string, bool) -> bool;
     callback select-subtitle(int);
+    callback toggle-subtitles();
     callback select-audio(int);
     callback play-entry(int);
     callback open-file();
