@@ -18,6 +18,7 @@ mod updater;
 mod video;
 #[cfg(windows)]
 mod video_d3d11;
+mod volume;
 #[cfg(target_os = "linux")]
 mod wayland;
 
@@ -230,6 +231,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     mpv.add_stream_protocol(http_cache::PROTOCOL, http_cache::open_stream)?;
     observe_properties(&mpv)?;
     settings::wire(&mpv, &app, &config);
+    volume::wire(&mpv, &config);
     resume::wire(&app, &mpv, &config);
 
     let state = Arc::new(EventState { capture: Mutex::new(capture), ..Default::default() });
@@ -396,7 +398,12 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                     resume::save_soon();
                 }
             }
-            Event::Hook { kind, id } => resume::handle_hook(mpv, kind, id),
+            Event::Hook { kind, id } => {
+                if kind == resume::HOOK_LOAD {
+                    volume::file_loading(&mpv.get_string("stream-open-filename").unwrap_or_default());
+                }
+                resume::handle_hook(mpv, kind, id);
+            }
             // While opening, the audio view keeps its title until the file's info switches in all at once.
             Event::PropertyChange { id: MEDIA_TITLE, value } => {
                 let title: SharedString = readable_title(text(value)).into();
@@ -566,6 +573,9 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                     }
                     player.set_phase(Phase::Playing);
                     read_in_background(mpv, app, &state.tag_refresh, read_tags, apply_tags);
+                    if player.get_tracks_known() {
+                        volume::file_playing(player.get_audio_only());
+                    }
                     opener::playback_restarted();
                 } else if player.get_phase() == Phase::Playing {
                     resume::save_soon();
@@ -1385,6 +1395,7 @@ fn set_volume(mpv: &Mpv, player: &Player, osd: &Osd, level: f32) {
     let percent = (level * 100.0).round();
     log_error(mpv.command(&["set", "volume", &percent.to_string()]));
     log_error(mpv.command(&["set", "mute", "no"]));
+    volume::remember(percent as u32);
     player.set_volume(level);
     player.set_muted(false);
     osd.show(format!("Volume {percent}%"));
@@ -1489,6 +1500,7 @@ fn wire_window_controls(app: &AppWindow, osd: &Osd, config: &SharedConfig) {
     controls.on_close(move || {
         if let Some(app) = app_weak.upgrade() {
             resume::save_now();
+            volume::save_pending();
             settings::remember_window(&app, &close_config);
             log_error(app.window().hide());
         }

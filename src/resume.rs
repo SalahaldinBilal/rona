@@ -109,7 +109,8 @@ pub fn wire(app: &AppWindow, mpv: &Mpv, config: &SharedConfig) {
         .unwrap_or_default()
         .split(',')
         .map(str::trim)
-        .filter(|name| !name.is_empty() && *name != "start")
+        // The volume is remembered per kind of file instead (volume.rs), and a saved one would override it.
+        .filter(|name| !name.is_empty() && !matches!(*name, "start" | "volume"))
         .map(str::to_string)
         .collect();
 

@@ -118,14 +118,6 @@ component PlaybackPage inherits Page {
         Rectangle { horizontal-stretch: 1; }
     }
 
-    SliderRow {
-        label: "Start volume";
-        value <=> Settings.start-volume;
-        minimum: 0;
-        maximum: 100;
-        suffix: "%";
-    }
-
     Gap {}
     SectionHeading { text: "AT THE END OF A FILE"; }
 

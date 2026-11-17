@@ -50,7 +50,9 @@ pub struct Config {
     pub resume: bool,
     pub resume_audio: bool,
     pub resume_days: u32,
-    pub start_volume: u32,
+    // The last volume used for each kind of file, not shown in the dialog.
+    pub video_volume: u32,
+    pub audio_volume: u32,
     pub end_action: usize,
     pub seek_short: f64,
     pub seek_long: f64,
@@ -104,7 +106,8 @@ impl Default for Config {
             resume: true,
             resume_audio: false,
             resume_days: 3,
-            start_volume: 100,
+            video_volume: 100,
+            audio_volume: 100,
             end_action: 1,
             seek_short: 5.0,
             seek_long: 60.0,
@@ -192,7 +195,6 @@ impl Config {
                 self.resume = defaults.resume;
                 self.resume_audio = defaults.resume_audio;
                 self.resume_days = defaults.resume_days;
-                self.start_volume = defaults.start_volume;
                 self.end_action = defaults.end_action;
                 self.seek_short = defaults.seek_short;
                 self.seek_long = defaults.seek_long;
@@ -282,7 +284,8 @@ impl Config {
             ("resume", yes_no(self.resume)),
             ("resume-audio", yes_no(self.resume_audio)),
             ("resume-days", self.resume_days.to_string()),
-            ("start-volume", self.start_volume.to_string()),
+            ("video-volume", self.video_volume.to_string()),
+            ("audio-volume", self.audio_volume.to_string()),
             ("end-action", END_ACTIONS[self.end_action].into()),
             ("seek-short", self.seek_short.to_string()),
             ("seek-long", self.seek_long.to_string()),
@@ -345,7 +348,13 @@ impl Config {
             "resume" => set_flag(&mut self.resume, value),
             "resume-audio" => set_flag(&mut self.resume_audio, value),
             "resume-days" => set_number(&mut self.resume_days, value, |days| *days > 0),
-            "start-volume" => set_number(&mut self.start_volume, value, |volume| *volume <= 100),
+            // Written by older versions, it seeds both remembered levels.
+            "start-volume" => {
+                set_number(&mut self.video_volume, value, is_volume);
+                set_number(&mut self.audio_volume, value, is_volume);
+            }
+            "video-volume" => set_number(&mut self.video_volume, value, is_volume),
+            "audio-volume" => set_number(&mut self.audio_volume, value, is_volume),
             "end-action" => set_choice(&mut self.end_action, value, &END_ACTIONS),
             "seek-short" => set_number(&mut self.seek_short, value, is_positive),
             "seek-long" => set_number(&mut self.seek_long, value, is_positive),
@@ -417,6 +426,11 @@ fn set_flag(field: &mut bool, value: &str) {
         "no" => *field = false,
         _ => {}
     }
+}
+
+// The highest volume limit is 200%.
+fn is_volume(volume: &u32) -> bool {
+    *volume <= 200
 }
 
 fn set_number<T: FromStr>(field: &mut T, value: &str, valid: impl Fn(&T) -> bool) {
@@ -513,7 +527,7 @@ pub fn load() -> Config {
     config
 }
 
-fn save(config: &Config) {
+pub fn save(config: &Config) {
     let Some(dir) = config_dir() else { return };
     let text: String = config.entries().iter().map(|(name, value)| format!("{name} = {value}\n")).collect();
     let result = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join(FILE_NAME), text));
@@ -600,7 +614,6 @@ fn write_ui(ui: &SettingsUi, config: &Config, devices: &[AudioDevice]) {
     ui.set_resume(config.resume);
     ui.set_resume_audio(config.resume_audio);
     ui.set_resume_days(config.resume_days.to_string().into());
-    ui.set_start_volume(config.start_volume as f32);
     ui.set_end_action(config.end_action as i32);
     ui.set_seek_short(config.seek_short.to_string().into());
     ui.set_seek_long(config.seek_long.to_string().into());
@@ -653,7 +666,6 @@ fn read_ui(ui: &SettingsUi, config: &mut Config, devices: &[AudioDevice]) {
     config.resume = ui.get_resume();
     config.resume_audio = ui.get_resume_audio();
     set_number(&mut config.resume_days, &ui.get_resume_days(), |days| *days > 0);
-    config.start_volume = ui.get_start_volume().round().clamp(0.0, 100.0) as u32;
     config.end_action = index(ui.get_end_action(), END_ACTIONS.len());
     set_number(&mut config.seek_short, &ui.get_seek_short(), is_positive);
     set_number(&mut config.seek_long, &ui.get_seek_long(), is_positive);
@@ -754,7 +766,6 @@ pub fn wire(mpv: &Mpv, app: &AppWindow, config: &SharedConfig) {
         ui.set_renderer_at_start(renderer_index(config.renderer));
         ensure_audio_device(&mut lock_devices(&devices), &config.audio_device);
         write_ui(&ui, &config, &lock_devices(&devices));
-        log_error(mpv.command(&["set", "volume", &config.start_volume.to_string()]));
         apply(mpv, app, None, &config, &defaults);
     }
     refresh_audio_devices(mpv, app, &devices);

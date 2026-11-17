@@ -7,6 +7,7 @@
 - `--new-instance` starts a separate window even while Rona is already open.
 
 ### Changed
+- The volume you set in the player is remembered, one level for audio files and one for videos, and each file starts at its kind's level. This replaces the Start volume setting, and a saved start volume becomes the starting level for both.
 - Opening a file while Rona is running plays it in the open window instead of starting a second one. Files opened together, like a selection in Explorer, become one playlist.
 - When some of the files or links you open can't be played, a message says how many were skipped.
 
