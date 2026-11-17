@@ -113,12 +113,13 @@ impl VideoLayer {
         picture: Option<Picture>,
         resize_now: bool,
         hold: bool,
+        backdrop: [f32; 3],
     ) -> Result<(), String> {
         if window.0 <= 0 || window.1 <= 0 {
             return Ok(());
         }
         if area.width <= 0 || area.height <= 0 {
-            unsafe { self.clear_window(window) };
+            unsafe { self.clear_window(window, backdrop) };
             return Ok(());
         }
         let resized = self.follow_area_size((area.width, area.height), Instant::now(), resize_now)?;
@@ -143,7 +144,7 @@ impl VideoLayer {
         } else {
             self.picture_source(picture)
         };
-        unsafe { self.present(window, area, source) };
+        unsafe { self.present(window, area, source, backdrop) };
         Ok(())
     }
 
@@ -224,13 +225,13 @@ impl VideoLayer {
         Ok(())
     }
 
-    unsafe fn clear_window(&self, window: (i32, i32)) {
+    unsafe fn clear_window(&self, window: (i32, i32), color: [f32; 3]) {
         let gl = &self.gl;
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             gl.disable(glow::SCISSOR_TEST);
             gl.viewport(0, 0, window.0, window.1);
-            gl.clear_color(0.0, 0.0, 0.0, 1.0);
+            gl.clear_color(color[0], color[1], color[2], 1.0);
             gl.clear(glow::COLOR_BUFFER_BIT);
         }
     }
@@ -272,14 +273,14 @@ impl VideoLayer {
         Some((width as u32, height as u32, top_down))
     }
 
-    unsafe fn present(&self, window: (i32, i32), area: Area, source: (i32, i32, i32, i32)) {
+    unsafe fn present(&self, window: (i32, i32), area: Area, source: (i32, i32, i32, i32), backdrop: [f32; 3]) {
         let (source_left, source_low, source_right, source_high) = source;
         let (x, y, width, height) =
             self.video_rect(window, area, (source_right - source_left, source_high - source_low));
 
         let gl = &self.gl;
         unsafe {
-            self.clear_window(window);
+            self.clear_window(window, backdrop);
             #[cfg(windows)]
             if let Target::Direct3D(target) = &self.target
                 && !target.lock()

@@ -16,13 +16,14 @@ import { LinkBox } from "link-box.slint";
 import { UpdateBanner } from "update-banner.slint";
 import { ResizeFrame } from "components/resize-frame.slint";
 
+export { Theme } from "theme.slint";
 export { Player, WindowControls, Panels, Recorder, Settings, Updates, UpdatePhase, ResizeEdge, Phase, FailureKind, DragState, TrackItem, PlaylistItem, LoadedRange, ChapterItem, ShortcutItem } from "state.slint";
 export component AppWindow inherits Window {
     title: Player.media-title != "" ? Player.media-title : "Rona";
     no-frame: true;
     preferred-width: 1280px;
     preferred-height: 720px + Theme.title-height + Theme.controls-height;
-    background: black;
+    background: Theme.backdrop;
     forward-focus: keys;
 
     property <length> playlist-width: 280px;
@@ -142,7 +143,7 @@ export component AppWindow inherits Window {
         y: root.video-y;
         width: root.video-width;
         height: root.video-height;
-        background: black;
+        background: Theme.backdrop;
     }
 
     AudioView {

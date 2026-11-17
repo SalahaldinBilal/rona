@@ -1163,6 +1163,13 @@ fn attach_video(
                 // Switching between the video area and the cover is not a window resize, so it doesn't wait to settle.
                 let switched_area = showing_cover != showed_cover;
                 showed_cover = showing_cover;
+                let backdrop =
+                    if showing_cover { app.global::<Theme>().get_backdrop() } else { slint::Color::from_rgb_u8(0, 0, 0) };
+                // mpv fills its buffer around a cover that isn't square with this color.
+                if switched_area {
+                    let hex = format!("#{:02x}{:02x}{:02x}", backdrop.red(), backdrop.green(), backdrop.blue());
+                    log_error(mpv.command(&["set", "background-color", &hex]));
+                }
                 let area = if showing_cover {
                     let size = (app.get_cover_size() * scale).round() as i32;
                     Area {
@@ -1181,7 +1188,8 @@ fn attach_video(
                 };
                 let window_size = (size.width as i32, size.height as i32);
                 let picture = *event_state.picture.lock().unwrap();
-                log_error(video.draw(window_size, area, picture, switched_area, hold_frame));
+                let clear = [backdrop.red(), backdrop.green(), backdrop.blue()].map(|channel| f32::from(channel) / 255.0);
+                log_error(video.draw(window_size, area, picture, switched_area, hold_frame, clear));
                 capture_shown_frame(video, window_size, area, &event_state, &app_weak);
                 if video.resize_pending() {
                     schedule_video_redraw(&app_weak);

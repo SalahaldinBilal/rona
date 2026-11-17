@@ -6,6 +6,7 @@
 - V hides or shows subtitles without turning the track off. It can be changed under Shortcuts in Settings. "Show hidden subtitles again on the next file" (Subtitles settings, on by default) decides whether they stay hidden when the next file starts.
 
 ### Changed
+- The start screen, loading and error screens and the audio view use a dark gray background instead of black, which is easier on the eyes and shows dark details. Only the bars around a playing video stay black.
 - The remembered volume levels and the window's place and size are saved to `state.conf` instead of `settings.conf`, so the settings file only changes when you change a setting. Values saved by earlier versions carry over.
 
 ### Fixed
