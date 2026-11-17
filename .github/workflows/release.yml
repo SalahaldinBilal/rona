@@ -117,9 +117,31 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: cargo xtask deploy
 
+  nix:
+    name: Nix (${{ matrix.runner }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - uses: Mic92/niks3-action@v1
+        continue-on-error: true
+        with:
+          server-url: https://niks3.kirsi.dev
+
+      - name: Build
+        run: nix build --print-build-logs .
+
   stable:
     name: Move stable branch
-    needs: deploy
+    needs: [deploy, nix]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
