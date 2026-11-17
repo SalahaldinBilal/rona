@@ -15,6 +15,7 @@ mod recorder;
 mod resume;
 mod settings;
 mod shortcuts;
+mod state;
 mod updater;
 mod video;
 #[cfg(windows)]
@@ -45,6 +46,7 @@ use mpv::{Event, Mpv, Node, PropertyValue};
 use capture::Capture;
 use instance::Claim;
 use settings::SharedConfig;
+use state::SharedState;
 use video::{Area, Picture, VideoLayer};
 
 slint::include_modules!();
@@ -224,15 +226,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let config: SharedConfig = Rc::new(RefCell::new(settings::load()));
+    let saved_state: SharedState = Rc::new(RefCell::new(state::load()));
     let app = AppWindow::new()?;
-    if capture.is_none() {
-        settings::restore_window(&app, &config.borrow());
+    if capture.is_none() && config.borrow().remember_window {
+        state::restore_window(&app, &saved_state.borrow());
     }
     let mpv = Mpv::new()?;
     mpv.add_stream_protocol(http_cache::PROTOCOL, http_cache::open_stream)?;
     observe_properties(&mpv)?;
     settings::wire(&mpv, &app, &config);
-    volume::wire(&mpv, &config);
+    volume::wire(&mpv, &saved_state);
     resume::wire(&app, &mpv, &config);
 
     let state = Arc::new(EventState { capture: Mutex::new(capture), ..Default::default() });
@@ -256,7 +259,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     opener::wire(&app, &mpv, &osd, loader);
     wire_playback(&mpv, &app, &osd, &config);
-    wire_window_controls(&app, &osd, &config);
+    wire_window_controls(&app, &osd, &config, &saved_state);
     let _download_watch = watch_download(&app, &state);
     let _recorder = recorder::wire(&app, &mpv, state);
     updater::wire(&app, &config);
@@ -1418,7 +1421,7 @@ fn update_window_level(app: &AppWindow) {
     app.window().with_winit_window(|window| window.set_window_level(level));
 }
 
-fn wire_window_controls(app: &AppWindow, osd: &Osd, config: &SharedConfig) {
+fn wire_window_controls(app: &AppWindow, osd: &Osd, config: &SharedConfig, saved_state: &SharedState) {
     let controls = app.global::<WindowControls>();
 
     // Slint keeps only one winit event callback per window, so every handler goes through this one.
@@ -1497,12 +1500,14 @@ fn wire_window_controls(app: &AppWindow, osd: &Osd, config: &SharedConfig) {
         window.set_maximized(!window.is_maximized());
     });
 
-    let (app_weak, close_config) = (app.as_weak(), config.clone());
+    let (app_weak, close_config, close_state) = (app.as_weak(), config.clone(), saved_state.clone());
     controls.on_close(move || {
         if let Some(app) = app_weak.upgrade() {
             resume::save_now();
             volume::save_pending();
-            settings::remember_window(&app, &close_config);
+            if close_config.borrow().remember_window {
+                state::remember_window(&app, &close_state);
+            }
             log_error(app.window().hide());
         }
     });
