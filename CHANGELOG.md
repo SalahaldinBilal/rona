@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-17
+
 ### Added
 - Shuffle and repeat for playlists, in the playlist panel and the audio view. Shuffle picks a random play order without rearranging the list, and repeat plays the playlist once more or forever. Both are remembered separately for audio and video playlists.
 - Audio files show their cover and artist in the playlist, also in playlists that mix audio and video.
