@@ -24,9 +24,16 @@ export struct LoadedRange {
     end: float,
 }
 
+export enum CoverState { missing, loading, shown }
+
 // In the list's own order, which shuffle never changes.
 export struct PlaylistItem {
     title: string,
+    is-audio: bool,
+    artist: string,
+    // Audio files show their cover, read in the background.
+    cover-state: CoverState,
+    cover: image,
     current: bool,
     failed: bool,
     // Already played in this pass of a shuffled playlist.
@@ -227,6 +234,8 @@ export global Player {
     in property <bool> subtitles-off: true;
     in property <bool> subtitles-hidden;
     in property <[PlaylistItem]> playlist;
+    // Rows have a cover column, when any entry is an audio file.
+    in property <bool> playlist-covers;
     in property <bool> shuffle;
     // 0 off, 1 once more, 2 forever.
     in property <int> repeat;

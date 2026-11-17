@@ -1,5 +1,6 @@
 import { Theme } from "theme.slint";
-import { Player, Panels } from "state.slint";
+import { Player, Panels, CoverState } from "state.slint";
+import { Glyphs } from "components/screen-parts.slint";
 import { Icon } from "components/icon.slint";
 import { IconButton } from "components/buttons.slint";
 import { Clickable } from "components/clickable.slint";
@@ -51,10 +52,67 @@ component MenuRow inherits Rectangle {
     }
 }
 
+component CoverThumb inherits Rectangle {
+    in property <CoverState> cover-state;
+    in property <image> source;
+    in property <bool> playing;
+    // A video in a playlist that also has audio, which keeps the column lined up with a video tile.
+    in property <bool> video;
+
+    property <bool> shown: !root.video && root.cover-state == CoverState.shown;
+
+    width: 34px;
+    height: 34px;
+    border-radius: 4px;
+    border-width: root.video || root.cover-state == CoverState.missing ? 1px : 0px;
+    border-color: Theme.line;
+    background: root.shown ? transparent : #ffffff0a;
+    clip: true;
+
+    if root.shown: Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.source;
+        image-fit: cover;
+    }
+
+    if !root.video && root.cover-state == CoverState.missing: Icon {
+        width: 15px;
+        height: 15px;
+        viewbox: 24;
+        tint: #ffffff4d;
+        stroke-commands: Glyphs.note;
+    }
+
+    if root.video: Icon {
+        width: 15px;
+        height: 15px;
+        viewbox: 24;
+        tint: #ffffff4d;
+        stroke-commands: "M 4 6 H 20 V 18 H 4 Z M 10 9.5 L 14.5 12 L 10 14.5 Z";
+    }
+
+    if root.playing: Rectangle {
+        background: #000000a0;
+
+        Icon {
+            width: 12px;
+            height: 12px;
+            tint: Theme.accent;
+            fill-commands: "M 5 3 V 15 L 15 9 Z";
+        }
+    }
+}
+
 component PlaylistRow inherits Rectangle {
     in property <int> index;
     in property <int> count;
     in property <string> title;
+    in property <bool> show-cover;
+    in property <bool> is-audio;
+    in property <string> artist;
+    in property <CoverState> cover-state;
+    in property <image> cover;
     in property <bool> current;
     in property <bool> failed;
     in property <bool> played;
@@ -73,6 +131,10 @@ component PlaylistRow inherits Rectangle {
     callback drag-end();
 
     property <bool> hovered: !root.drag-active && (area.has-hover || grip.has-hover || remove-area.has-hover);
+    property <string> status: root.current ? "Now playing" : root.failed ? "Couldn't play" : "";
+    property <string> detail: root.show-cover && root.artist != ""
+        ? (root.status != "" ? root.artist + " · " + root.status : root.artist)
+        : root.status;
 
     height: PlaylistLayout.row-height;
     border-radius: 6px;
@@ -159,6 +221,18 @@ component PlaylistRow inherits Rectangle {
             }
         }
 
+        if root.show-cover: VerticalLayout {
+            alignment: center;
+            padding-right: 6px;
+
+            CoverThumb {
+                cover-state: root.cover-state;
+                source: root.cover;
+                playing: root.current;
+                video: !root.is-audio;
+            }
+        }
+
         VerticalLayout {
             alignment: center;
             spacing: 2px;
@@ -171,10 +245,11 @@ component PlaylistRow inherits Rectangle {
                 overflow: elide;
             }
 
-            if root.current || root.failed: Text {
-                text: root.current ? "Now playing" : "Couldn't play";
-                color: root.current ? Theme.muted : Theme.danger;
+            if root.detail != "": Text {
+                text: root.detail;
+                color: root.failed && !root.current ? Theme.danger : Theme.muted;
                 font-size: 11px;
+                overflow: elide;
             }
         }
 
@@ -434,6 +509,11 @@ export component PlaylistPanel inherits Rectangle {
                         index: index;
                         count: root.count;
                         title: item.title;
+                        show-cover: Player.playlist-covers;
+                        is-audio: item.is-audio;
+                        artist: item.artist;
+                        cover-state: item.cover-state;
+                        cover: item.cover;
                         current: item.current;
                         failed: item.failed;
                         played: item.played;
@@ -483,6 +563,17 @@ export component PlaylistPanel inherits Rectangle {
                         font-size: 13px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                    }
+
+                    if Player.playlist-covers && root.drag-from >= 0 && root.drag-from < root.count: VerticalLayout {
+                        alignment: center;
+                        padding-right: 6px;
+
+                        CoverThumb {
+                            cover-state: Player.playlist[root.drag-from].cover-state;
+                            source: Player.playlist[root.drag-from].cover;
+                            video: !Player.playlist[root.drag-from].is-audio;
+                        }
                     }
 
                     Text {

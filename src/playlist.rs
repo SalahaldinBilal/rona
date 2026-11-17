@@ -1,12 +1,13 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
 use crate::mpv::Mpv;
 use crate::state::{self, PlayModes, Repeat, SharedState};
-use crate::{AppWindow, Player, PlaylistItem, audio_info, file_display_name, log_error, media, opener};
+use crate::{AppWindow, CoverState, Player, PlaylistItem, audio_info, file_display_name, log_error, media, opener};
 
 const UNDO_SHOWN_FOR: Duration = Duration::from_secs(5);
 // Next is where playback usually goes, previous is one key press away.
@@ -19,6 +20,8 @@ pub struct Entry {
     filename: String,
     title: String,
     current: bool,
+    // The playlist's title, artist and cover from the file itself, once read.
+    summary: Option<Arc<audio_info::Summary>>,
 }
 
 pub struct Read {
@@ -35,16 +38,18 @@ pub fn read(mpv: &Mpv) -> Read {
         .map(|index| {
             let field = |name: &str| mpv.get_string(&format!("playlist/{index}/{name}"));
             let filename = field("filename").unwrap_or_default();
+            let summary = audio_info::summary(&filename);
             // mpv only knows a file's title once it has played it, so the pre-read one fills in before that.
             let title = field("title")
                 .filter(|title| !title.is_empty())
-                .or_else(|| audio_info::title(&filename).flatten())
+                .or_else(|| summary.as_ref().and_then(|summary| summary.title.clone()))
                 .unwrap_or_else(|| file_display_name(&filename));
             Entry {
                 id: field("id").and_then(|id| id.parse().ok()).unwrap_or(-(index as i64) - 1),
                 filename,
                 title,
                 current: field("current").as_deref() == Some("yes"),
+                summary,
             }
         })
         .collect();
@@ -310,7 +315,23 @@ impl Playlist {
             .filter_map(|id| {
                 let index = self.play_index(*id)?;
                 let entry = &self.play[index];
+                let thumb = entry.summary.as_ref().and_then(|summary| summary.thumb.clone());
+                // Still being read when a readable file has no summary yet.
+                let cover_state = match (&entry.summary, &thumb) {
+                    (_, Some(_)) => CoverState::Shown,
+                    (None, None) if audio_info::can_read(&entry.filename) => CoverState::Loading,
+                    _ => CoverState::Missing,
+                };
                 Some(PlaylistItem {
+                    is_audio: media::is_audio_name(&entry.filename),
+                    artist: entry
+                        .summary
+                        .as_ref()
+                        .and_then(|summary| summary.artist.as_deref())
+                        .unwrap_or_default()
+                        .into(),
+                    cover_state,
+                    cover: thumb.map(slint::Image::from_rgba8).unwrap_or_default(),
                     title: entry.title.as_str().into(),
                     current: entry.current,
                     failed: opener::has_failed(&entry.filename),
@@ -328,6 +349,7 @@ impl Playlist {
         }
         let track = current.and_then(|current| self.list.iter().position(|id| *id == self.play[current].id));
         player.set_track_number(track.map_or(0, |track| track as i32 + 1));
+        player.set_playlist_covers(self.play.iter().any(|entry| media::is_audio_name(&entry.filename)));
         player.set_playlist(ModelRc::new(VecModel::from(items)));
 
         let files: Vec<String> = self.play.iter().map(|entry| entry.filename.clone()).collect();
@@ -339,7 +361,7 @@ impl Playlist {
             })
             .unwrap_or_default();
         audio_info::prefetch(upcoming);
-        audio_info::read_titles(&files);
+        audio_info::read_summaries(&files);
     }
 
     fn refresh(&self) {
