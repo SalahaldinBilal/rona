@@ -24,10 +24,15 @@ export struct LoadedRange {
     end: float,
 }
 
+// In the list's own order, which shuffle never changes.
 export struct PlaylistItem {
     title: string,
     current: bool,
     failed: bool,
+    // Already played in this pass of a shuffled playlist.
+    played: bool,
+    // Plays after the current one.
+    next: bool,
 }
 
 export struct ShortcutItem {
@@ -222,6 +227,11 @@ export global Player {
     in property <bool> subtitles-off: true;
     in property <bool> subtitles-hidden;
     in property <[PlaylistItem]> playlist;
+    in property <bool> shuffle;
+    // 0 off, 1 once more, 2 forever.
+    in property <int> repeat;
+    // Shown with an Undo button after an entry is removed, empty otherwise.
+    in property <string> undo-text;
     in property <[LoadedRange]> loaded-ranges;
     in property <[ChapterItem]> chapters;
     in property <string> download-speed;
@@ -255,6 +265,15 @@ export global Player {
     in property <string> audio-title;
     in property <string> audio-artist;
     in property <string> audio-album;
+    // The pre-read cover shrunk to a few pixels, stretched over the audio view as its background.
+    in property <bool> has-ambient;
+    in property <image> ambient-image;
+    // Codec, bit depth, sample rate and channels, as separate tags.
+    in property <[string]> audio-tags;
+    // The current entry's place in the list, from 1, 0 when unknown.
+    in property <int> track-number;
+    in property <bool> has-next-cover;
+    in property <image> next-cover;
     in property <DragState> drag-state: DragState.none;
     in property <string> drag-name;
 
@@ -272,7 +291,15 @@ export global Player {
     callback select-subtitle(int);
     callback toggle-subtitles();
     callback select-audio(int);
+    // Entry indexes are places in the list as shown.
     callback play-entry(int);
+    callback remove-entry(int);
+    // Moves an entry so it lands before the one at the second index, or at the end when that is the length.
+    callback move-entry(int, int);
+    callback play-entry-next(int);
+    callback undo-remove();
+    callback toggle-shuffle();
+    callback cycle-repeat();
     callback open-file();
     callback show-link-box();
     callback paste-link();

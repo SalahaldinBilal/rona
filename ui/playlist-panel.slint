@@ -3,18 +3,103 @@ import { Player, Panels } from "state.slint";
 import { Icon } from "components/icon.slint";
 import { IconButton } from "components/buttons.slint";
 import { Clickable } from "components/clickable.slint";
+import { TextButton } from "components/form.slint";
+import { ShuffleButton, RepeatButton } from "components/play-modes.slint";
+
+export global PlaylistLayout {
+    out property <length> row-height: 46px;
+    out property <length> padding: 4px;
+    // Two columns of three dots, drawn as a path since the usual grip characters are missing from the font.
+    out property <string> grip-dots: "M 5.6 4.5 A 1.3 1.3 0 1 0 8.2 4.5 A 1.3 1.3 0 1 0 5.6 4.5 Z M 9.8 4.5 A 1.3 1.3 0 1 0 12.4 4.5 A 1.3 1.3 0 1 0 9.8 4.5 Z M 5.6 9 A 1.3 1.3 0 1 0 8.2 9 A 1.3 1.3 0 1 0 5.6 9 Z M 9.8 9 A 1.3 1.3 0 1 0 12.4 9 A 1.3 1.3 0 1 0 9.8 9 Z M 5.6 13.5 A 1.3 1.3 0 1 0 8.2 13.5 A 1.3 1.3 0 1 0 5.6 13.5 Z M 9.8 13.5 A 1.3 1.3 0 1 0 12.4 13.5 A 1.3 1.3 0 1 0 9.8 13.5 Z";
+}
+
+component MenuRow inherits Rectangle {
+    in property <string> text;
+    in property <string> key;
+    in property <bool> danger;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 28px;
+    border-radius: 5px;
+    background: menu-area.pressed && root.enabled ? Theme.pressed : menu-area.has-hover && root.enabled ? Theme.hover : transparent;
+    animate background { duration: Theme.hover-duration; }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.text;
+            color: !root.enabled ? Theme.muted : root.danger ? Theme.danger : Theme.text;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.key;
+            color: Theme.muted;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+    }
+
+    menu-area := Clickable {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
 
 component PlaylistRow inherits Rectangle {
     in property <int> index;
+    in property <int> count;
     in property <string> title;
     in property <bool> current;
     in property <bool> failed;
-    callback clicked();
+    in property <bool> played;
+    in property <bool> next;
+    in property <bool> selected;
+    // While any row is dragged, rows don't react to hovering.
+    in property <bool> drag-active;
+    in property <bool> lifted;
+    callback play();
+    callback select();
+    callback remove();
+    callback play-next();
+    callback move-to(int);
+    callback drag-start();
+    callback drag-move(length);
+    callback drag-end();
 
-    height: 46px;
+    property <bool> hovered: !root.drag-active && (area.has-hover || grip.has-hover || remove-area.has-hover);
+
+    height: PlaylistLayout.row-height;
     border-radius: 6px;
-    background: root.current ? Theme.accent-soft : area.pressed ? Theme.pressed : area.has-hover ? Theme.hover : transparent;
+    // The dragged row's place shows as the gap it would fill again.
+    opacity: root.lifted ? 0 : 1;
+    background: root.current
+        ? Theme.accent-soft
+        : area.pressed ? Theme.pressed : root.hovered || root.selected ? Theme.hover : transparent;
     animate background { duration: Theme.hover-duration; }
+    border-width: root.selected ? 1px : 0px;
+    border-color: Theme.line-hover;
+
+    area := Clickable {
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                root.select();
+                menu.show();
+            }
+        }
+        clicked => {
+            root.select();
+            // Clicking the file that's already playing would restart it.
+            if (!root.current) {
+                root.play();
+            }
+        }
+    }
 
     if root.current: Rectangle {
         x: 0;
@@ -26,26 +111,62 @@ component PlaylistRow inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: 8px;
-        padding-right: 8px;
-        spacing: 10px;
+        padding-left: 2px;
+        padding-right: 6px;
+        spacing: 4px;
 
-        Text {
+        grip := TouchArea {
+            width: 16px;
+            mouse-cursor: MouseCursor.grab;
+            pointer-event(event) => {
+                if (event.button != PointerEventButton.left) {
+                    return;
+                }
+                if (event.kind == PointerEventKind.down) {
+                    root.drag-start();
+                    root.drag-move(self.mouse-y);
+                } else if (event.kind == PointerEventKind.up) {
+                    root.drag-end();
+                }
+            }
+            moved => { root.drag-move(self.mouse-y); }
+
+            Icon {
+                width: 14px;
+                height: 14px;
+                tint: grip.has-hover ? Theme.text : Theme.muted;
+                opacity: root.hovered || root.lifted ? 1 : 0;
+                fill-commands: PlaylistLayout.grip-dots;
+            }
+        }
+
+        // A played entry shows a check instead of its number.
+        Rectangle {
             width: 22px;
-            text: root.index + 1;
-            color: root.current ? Theme.accent : Theme.muted;
-            font-size: 13px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+
+            if !root.played: Text {
+                text: root.index + 1;
+                color: root.current ? Theme.accent : Theme.muted;
+                font-size: 13px;
+            }
+
+            if root.played: Icon {
+                width: 13px;
+                height: 13px;
+                viewbox: 14;
+                tint: Theme.muted;
+                stroke-commands: "M 2 7.5 L 5.5 11 L 12 3.5";
+            }
         }
 
         VerticalLayout {
             alignment: center;
             spacing: 2px;
+            horizontal-stretch: 1;
 
             Text {
                 text: root.title;
-                color: root.failed && !root.current ? Theme.muted : Theme.text;
+                color: (root.failed || root.played) && !root.current ? Theme.muted : Theme.text;
                 font-size: 13px;
                 overflow: elide;
             }
@@ -56,20 +177,173 @@ component PlaylistRow inherits Rectangle {
                 font-size: 11px;
             }
         }
+
+        if root.next: VerticalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: next-label.preferred-width + 10px;
+                height: 16px;
+                border-radius: 4px;
+                background: Theme.accent-soft;
+
+                next-label := Text {
+                    text: "NEXT";
+                    color: Theme.accent;
+                    font-size: 9px;
+                    font-weight: 700;
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: 24px;
+                height: 24px;
+                border-radius: 12px;
+                opacity: root.hovered ? 1 : 0;
+                background: remove-area.pressed ? Theme.pressed : remove-area.has-hover ? Theme.hover : transparent;
+                animate background { duration: Theme.hover-duration; }
+
+                Icon {
+                    width: 12px;
+                    height: 12px;
+                    tint: remove-area.has-hover ? Theme.text : Theme.muted;
+                    stroke-commands: "M 5 5 L 13 13 M 13 5 L 5 13";
+                }
+
+                remove-area := Clickable {
+                    enabled: root.hovered;
+                    clicked => { root.remove(); }
+                }
+            }
+        }
     }
 
-    // Clicking the file that's already playing would restart it.
-    area := Clickable {
-        enabled: !root.current;
-        clicked => { root.clicked(); }
+    menu := PopupWindow {
+        x: area.mouse-x;
+        y: area.mouse-y;
+        width: 180px;
+        height: 4 * 28px + 9px + 10px;
+
+        Rectangle {
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.line;
+            background: Theme.panel;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #00000080;
+
+            VerticalLayout {
+                padding: 5px;
+
+                MenuRow {
+                    text: "Play next";
+                    enabled: !root.current && !root.next;
+                    clicked => { root.play-next(); }
+                }
+
+                MenuRow {
+                    text: "Move to top";
+                    enabled: root.index > 0;
+                    clicked => { root.move-to(0); }
+                }
+
+                MenuRow {
+                    text: "Move to bottom";
+                    enabled: root.index < root.count - 1;
+                    clicked => { root.move-to(root.count); }
+                }
+
+                Rectangle {
+                    height: 9px;
+
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.line;
+                    }
+                }
+
+                MenuRow {
+                    text: "Remove";
+                    key: "Del";
+                    danger: true;
+                    clicked => { root.remove(); }
+                }
+            }
+        }
     }
 }
 
 export component PlaylistPanel inherits Rectangle {
+    property <int> count: Player.playlist.length;
+    property <int> selected: -1;
+    // The row being dragged, and the pointer's place in the list's content, while dragging.
+    property <int> drag-from: -1;
+    property <length> drag-y;
+    property <int> drop-at: max(0, min(root.count, round((root.drag-y - PlaylistLayout.padding) / PlaylistLayout.row-height)));
+    property <bool> dragging: root.drag-from >= 0;
+    property <length> pointer-in-view: root.drag-y + list.content-y;
+    property <length> scroll-zone: 32px;
+    property <length> scroll-step: 6px;
+
     background: Theme.chrome;
+
+    function select(index: int) {
+        root.selected = index;
+        keys.focus();
+    }
+
+    function remove(index: int) {
+        Player.remove-entry(index);
+        root.selected = min(index, root.count - 1);
+    }
 
     TouchArea {
         clicked => { Panels.focus-requests += 1; }
+    }
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if (event.modifiers.control && (event.text == "z" || event.text == "Z")) {
+                Player.undo-remove();
+                return accept;
+            }
+            if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
+                return reject;
+            }
+            if (event.text == Key.UpArrow && root.count > 0) {
+                root.selected = max(0, root.selected - 1);
+                return accept;
+            }
+            if (event.text == Key.DownArrow && root.count > 0) {
+                root.selected = min(root.count - 1, root.selected + 1);
+                return accept;
+            }
+            if (event.text == Key.Delete && root.selected >= 0 && root.selected < root.count) {
+                root.remove(root.selected);
+                return accept;
+            }
+            if (event.text == Key.Return && root.selected >= 0 && root.selected < root.count) {
+                Player.play-entry(root.selected);
+                return accept;
+            }
+            if (event.text == Key.Escape) {
+                root.selected = -1;
+                Panels.focus-requests += 1;
+                return accept;
+            }
+            return Player.key-pressed(event.text, event.modifiers.shift) ? accept : reject;
+        }
+        focus-changed-event => {
+            if (!self.has-focus) {
+                root.selected = -1;
+            }
+        }
     }
 
     Rectangle {
@@ -86,7 +360,7 @@ export component PlaylistPanel inherits Rectangle {
 
             HorizontalLayout {
                 padding-left: 12px;
-                spacing: 8px;
+                spacing: 4px;
 
                 Text {
                     horizontal-stretch: 1;
@@ -98,10 +372,24 @@ export component PlaylistPanel inherits Rectangle {
                 }
 
                 Text {
-                    text: Player.playlist.length == 1 ? "1 item" : Player.playlist.length + " items";
+                    text: root.count == 1 ? "1 item" : root.count + " items";
                     color: Theme.muted;
                     font-size: 12px;
                     vertical-alignment: center;
+                }
+
+                Rectangle { width: 4px; }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    ShuffleButton {}
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    RepeatButton {}
                 }
 
                 IconButton {
@@ -126,14 +414,142 @@ export component PlaylistPanel inherits Rectangle {
 
             rows := VerticalLayout {
                 width: list.width;
-                padding: 4px;
+                padding: PlaylistLayout.padding;
 
-                for item[index] in Player.playlist: PlaylistRow {
-                    index: index;
-                    title: item.title;
-                    current: item.current;
-                    failed: item.failed;
-                    clicked => { Player.play-entry(index); }
+                // Each row sits in a fixed slot and slides inside it, so rows make room for a dragged one.
+                for item[index] in Player.playlist: Rectangle {
+                    height: PlaylistLayout.row-height;
+
+                    PlaylistRow {
+                        y: !root.dragging
+                            ? 0px
+                            : root.drop-at > root.drag-from && index > root.drag-from && index < root.drop-at
+                                ? -PlaylistLayout.row-height
+                                : root.drop-at < root.drag-from && index >= root.drop-at && index < root.drag-from
+                                    ? PlaylistLayout.row-height
+                                    : 0px;
+                        // Only while dragging, or rows would slide again when the dropped list comes back in its new order.
+                        animate y { duration: root.dragging ? 140ms : 0ms; easing: ease-out; }
+                        width: parent.width;
+                        index: index;
+                        count: root.count;
+                        title: item.title;
+                        current: item.current;
+                        failed: item.failed;
+                        played: item.played;
+                        next: item.next;
+                        selected: index == root.selected && keys.has-focus;
+                        drag-active: root.dragging;
+                        lifted: index == root.drag-from;
+                        play => { Player.play-entry(index); }
+                        select => { root.select(index); }
+                        remove => { root.remove(index); }
+                        play-next => { Player.play-entry-next(index); }
+                        move-to(to) => { Player.move-entry(index, to); }
+                        drag-start => {
+                            root.drag-from = index;
+                            root.selected = -1;
+                        }
+                        drag-move(y) => { root.drag-y = PlaylistLayout.padding + index * PlaylistLayout.row-height + y; }
+                        drag-end => {
+                            if (root.drop-at != root.drag-from && root.drop-at != root.drag-from + 1) {
+                                Player.move-entry(root.drag-from, root.drop-at);
+                            }
+                            root.drag-from = -1;
+                        }
+                    }
+                }
+            }
+
+            if root.dragging: Rectangle {
+                x: 8px;
+                y: root.drag-y - PlaylistLayout.row-height / 2;
+                width: list.width - 16px;
+                height: PlaylistLayout.row-height;
+                border-radius: 6px;
+                background: Theme.panel;
+                drop-shadow-blur: 16px;
+                drop-shadow-color: #00000099;
+
+                HorizontalLayout {
+                    padding-left: 18px;
+                    padding-right: 12px;
+                    spacing: 4px;
+
+                    Text {
+                        width: 22px;
+                        text: root.drag-from + 1;
+                        color: Theme.muted;
+                        font-size: 13px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.drag-from >= 0 && root.drag-from < root.count ? Player.playlist[root.drag-from].title : "";
+                        color: Theme.text;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+
+    // Holding a dragged row near the top or bottom scrolls the list.
+    Timer {
+        interval: 16ms;
+        running: root.dragging
+            && (root.pointer-in-view < root.scroll-zone || root.pointer-in-view > list.height - root.scroll-zone);
+        triggered => {
+            let lowest = min(0px, list.height - list.content-height);
+            let before = list.content-y;
+            if (root.pointer-in-view < root.scroll-zone) {
+                list.content-y = min(0px, before + root.scroll-step);
+            } else {
+                list.content-y = max(lowest, before - root.scroll-step);
+            }
+            root.drag-y -= list.content-y - before;
+        }
+    }
+
+    if Player.undo-text != "": Rectangle {
+        x: 10px;
+        y: root.height - self.height - 10px;
+        width: root.width - 20px;
+        height: 44px;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Theme.line;
+        background: Theme.panel;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: #00000099;
+
+        TouchArea {}
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 6px;
+            spacing: 8px;
+
+            Text {
+                horizontal-stretch: 1;
+                text: Player.undo-text;
+                color: Theme.text;
+                font-size: 12px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            VerticalLayout {
+                alignment: center;
+
+                TextButton {
+                    height: 30px;
+                    text: "Undo";
+                    clicked => { Player.undo-remove(); }
                 }
             }
         }

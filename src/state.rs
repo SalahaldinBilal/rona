@@ -10,6 +10,42 @@ pub type SharedState = Rc<RefCell<State>>;
 
 const FILE_NAME: &str = "state.conf";
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Repeat {
+    #[default]
+    Off,
+    // One more pass after the playlist ends.
+    Once,
+    Forever,
+}
+
+const REPEAT_NAMES: [(Repeat, &str); 3] = [(Repeat::Off, "no"), (Repeat::Once, "once"), (Repeat::Forever, "forever")];
+
+impl Repeat {
+    pub fn index(self) -> i32 {
+        REPEAT_NAMES.iter().position(|(repeat, _)| *repeat == self).unwrap_or(0) as i32
+    }
+
+    pub fn next(self) -> Self {
+        REPEAT_NAMES[(self.index() as usize + 1) % REPEAT_NAMES.len()].0
+    }
+
+    fn name(self) -> &'static str {
+        REPEAT_NAMES[self.index() as usize].1
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        REPEAT_NAMES.iter().find(|(_, known)| *known == name).map(|(repeat, _)| *repeat)
+    }
+}
+
+/// Shuffle and repeat, kept apart for audio and video playlists.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PlayModes {
+    pub shuffle: bool,
+    pub repeat: Repeat,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct WindowGeometry {
     x: i32,
@@ -25,12 +61,20 @@ pub struct State {
     // The last volume used for each kind of file.
     pub video_volume: u32,
     pub audio_volume: u32,
+    pub video_modes: PlayModes,
+    pub audio_modes: PlayModes,
     window: Option<WindowGeometry>,
 }
 
 impl Default for State {
     fn default() -> Self {
-        Self { video_volume: 100, audio_volume: 100, window: None }
+        Self {
+            video_volume: 100,
+            audio_volume: 100,
+            video_modes: PlayModes::default(),
+            audio_modes: PlayModes::default(),
+            window: None,
+        }
     }
 }
 
@@ -39,6 +83,10 @@ impl State {
         let mut entries = vec![
             ("video-volume".to_string(), self.video_volume.to_string()),
             ("audio-volume".to_string(), self.audio_volume.to_string()),
+            ("video-shuffle".to_string(), yes_no(self.video_modes.shuffle)),
+            ("video-repeat".to_string(), self.video_modes.repeat.name().to_string()),
+            ("audio-shuffle".to_string(), yes_no(self.audio_modes.shuffle)),
+            ("audio-repeat".to_string(), self.audio_modes.repeat.name().to_string()),
         ];
         if let Some(window) = self.window {
             let value = format!(
@@ -63,6 +111,10 @@ impl State {
             }
             "video-volume" => set_number(&mut self.video_volume, value, is_volume),
             "audio-volume" => set_number(&mut self.audio_volume, value, is_volume),
+            "video-shuffle" => self.video_modes.shuffle = value == "yes",
+            "audio-shuffle" => self.audio_modes.shuffle = value == "yes",
+            "video-repeat" => self.video_modes.repeat = Repeat::from_name(value).unwrap_or(self.video_modes.repeat),
+            "audio-repeat" => self.audio_modes.repeat = Repeat::from_name(value).unwrap_or(self.audio_modes.repeat),
             "window" => self.window = parse_window(value).or(self.window),
             _ => {}
         }
@@ -144,6 +196,8 @@ mod tests {
         let state = State {
             video_volume: 80,
             audio_volume: 135,
+            video_modes: PlayModes { shuffle: false, repeat: Repeat::Once },
+            audio_modes: PlayModes { shuffle: true, repeat: Repeat::Forever },
             window: Some(WindowGeometry { x: -8, y: 40, width: 1280, height: 720, maximized: true }),
         };
         let mut loaded = State::default();

@@ -1,0 +1,53 @@
+import { Theme } from "../theme.slint";
+import { Player } from "../state.slint";
+import { Icon } from "icon.slint";
+import { IconButton } from "buttons.slint";
+
+export component ShuffleButton inherits IconButton {
+    width: 30px;
+    height: 30px;
+    highlight-height: 30px;
+    active: Player.shuffle;
+    clicked => { Player.toggle-shuffle(); }
+
+    Icon {
+        width: 16px;
+        height: 16px;
+        tint: Player.shuffle ? Theme.accent : Theme.text;
+        stroke-commands: "M 2 5 H 5 C 9 5 9 13 13 13 H 16 M 13.5 10.5 L 16 13 L 13.5 15.5 M 2 13 H 5 C 6.5 13 7.3 12 8 10.8 M 10 7.2 C 10.7 6 11.5 5 13 5 H 16 M 13.5 2.5 L 16 5 L 13.5 7.5";
+    }
+}
+
+// Off, once more, forever. The badge tells the last two apart.
+export component RepeatButton inherits IconButton {
+    width: 30px;
+    height: 30px;
+    highlight-height: 30px;
+    active: Player.repeat > 0;
+    clicked => { Player.cycle-repeat(); }
+
+    Icon {
+        width: 16px;
+        height: 16px;
+        tint: Player.repeat > 0 ? Theme.accent : Theme.text;
+        stroke-commands: "M 3 8 V 7 C 3 5.9 3.9 5 5 5 H 15 M 12.5 2.5 L 15 5 L 12.5 7.5 M 15 10 V 11 C 15 12.1 14.1 13 13 13 H 3 M 5.5 15.5 L 3 13 L 5.5 10.5";
+    }
+
+    if Player.repeat > 0: Rectangle {
+        x: parent.width - self.width - 2px;
+        y: parent.height - self.height - 2px;
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        background: Theme.accent;
+
+        Text {
+            text: Player.repeat == 1 ? "1" : "∞";
+            color: Theme.chrome;
+            font-size: 9px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}

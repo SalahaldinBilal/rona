@@ -11,7 +11,7 @@ use slint::{ComponentHandle, SharedString, Timer, TimerMode};
 use crate::http_cache::{self, ConnectionState};
 use crate::media::{self, FileCheck, LinkCheck};
 use crate::mpv::Mpv;
-use crate::{AppWindow, DragState, FailureKind, Osd, Panels, Phase, Player, forget_audio_view, log_error};
+use crate::{AppWindow, DragState, FailureKind, Osd, Panels, Phase, Player, forget_audio_view, log_error, playlist};
 
 #[derive(Clone)]
 enum Source {
@@ -425,6 +425,7 @@ impl Opener {
         player.set_ended(false);
         player.set_phase(Phase::Opening);
         log_error(self.mpv.command(&["set", "pause", "no"]));
+        playlist::starting(&paths);
         self.loader.load(&self.mpv, paths);
     }
 

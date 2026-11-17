@@ -132,10 +132,10 @@ pub fn wire(app: &AppWindow, mpv: &Mpv, config: &SharedConfig) {
     RESUME.with(|slot| *slot.borrow_mut() = Some(Rc::new(resume)));
 }
 
-// The volume is remembered per kind of file instead (volume.rs), and an opened file always plays.
-// Entries written before these were left out can still hold them.
+// The volume is remembered per kind of file instead (volume.rs), an opened file always plays, and shuffle and
+// repeat belong to the playlist (playlist.rs). Entries written before these were left out can still hold them.
 fn restored(name: &str) -> bool {
-    !matches!(name, "volume" | "pause")
+    !matches!(name, "volume" | "pause" | "loop-playlist" | "shuffle")
 }
 
 /// mpv waits until the hook is continued, so this always continues it, even when resume is off.

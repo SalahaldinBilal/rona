@@ -48,13 +48,25 @@ export component AppWindow inherits Window {
         ? root.height
         : max(0px, root.height - Theme.title-height - Theme.controls-height);
 
+    // Wide windows put the audio view's cover beside the details, narrow ones stack them.
+    property <bool> audio-side: root.video-width >= 640px && root.video-width >= root.video-height * 1.2;
+    property <bool> big-cover: Player.has-cover || Player.has-cover-image;
+    property <length> side-info-width: min(400px, root.video-width * 0.42);
+
     // Where an audio file's cover goes. Rust renders mpv into this square instead of the whole video area.
-    out property <length> cover-size: max(0px, min(
-        min(Player.has-cover || Player.has-cover-image ? 280px : 168px, root.video-width - 48px),
-        root.video-height - AudioLayout.info-gap - AudioLayout.info-height - 48px));
-    out property <length> cover-x: (root.video-width - root.cover-size) / 2;
-    out property <length> cover-y: root.video-y
-        + (root.video-height - root.cover-size - AudioLayout.info-gap - AudioLayout.info-height) / 2;
+    out property <length> cover-size: root.audio-side
+        ? max(0px, min(
+            min(root.big-cover ? 340px : 220px, root.video-height - 96px),
+            root.video-width - root.side-info-width - AudioLayout.side-gap - 64px))
+        : max(0px, min(
+            min(root.big-cover ? 280px : 168px, root.video-width - 48px),
+            root.video-height - AudioLayout.info-gap - AudioLayout.info-height - 48px));
+    out property <length> cover-x: root.audio-side
+        ? (root.video-width - root.cover-size - AudioLayout.side-gap - root.side-info-width) / 2
+        : (root.video-width - root.cover-size) / 2;
+    out property <length> cover-y: root.video-y + (root.audio-side
+        ? (root.video-height - root.cover-size) / 2
+        : (root.video-height - root.cover-size - AudioLayout.info-gap - AudioLayout.info-height) / 2);
 
     // Opening right after an audio file keeps the audio view, with the old cover until the new one is drawn.
     property <bool> audio-view-shown: Player.audio-only
@@ -118,6 +130,10 @@ export component AppWindow inherits Window {
                     Player.paste-link();
                     return accept;
                 }
+                if (event.text == "z" || event.text == "Z") {
+                    Player.undo-remove();
+                    return accept;
+                }
             }
             if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
                 return reject;
@@ -162,6 +178,8 @@ export component AppWindow inherits Window {
         cover-x: root.cover-x;
         cover-y: root.cover-y - root.video-y;
         cover-size: root.cover-size;
+        side: root.audio-side;
+        info-width: root.side-info-width;
     }
 
     EndOverlay {

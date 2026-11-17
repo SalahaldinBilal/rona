@@ -2,10 +2,159 @@ import { Theme } from "theme.slint";
 import { Player } from "state.slint";
 import { Icon } from "components/icon.slint";
 import { Glyphs } from "components/screen-parts.slint";
+import { ShuffleButton, RepeatButton } from "components/play-modes.slint";
 
 export global AudioLayout {
+    // Below the cover when stacked.
     out property <length> info-gap: 18px;
-    out property <length> info-height: 62px;
+    out property <length> info-height: 112px;
+    // Between the cover and the details when side by side.
+    out property <length> side-gap: 40px;
+}
+
+component Tag inherits Rectangle {
+    in property <string> text;
+
+    width: label.preferred-width + 14px;
+    height: 20px;
+    border-radius: 4px;
+    background: #ffffff12;
+
+    label := Text {
+        text: root.text;
+        color: Theme.muted;
+        font-size: 11px;
+        font-weight: 600;
+    }
+}
+
+component Details inherits VerticalLayout {
+    in property <bool> centered;
+
+    property <TextHorizontalAlignment> align: root.centered ? TextHorizontalAlignment.center : TextHorizontalAlignment.left;
+
+    spacing: 4px;
+
+    if Player.track-number > 0 && Player.playlist.length > 1: Text {
+        text: "TRACK " + Player.track-number + " OF " + Player.playlist.length;
+        color: Theme.muted;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.8px;
+        horizontal-alignment: root.align;
+    }
+
+    Text {
+        text: Player.audio-title;
+        color: Theme.text;
+        font-size: root.centered ? 20px : 26px;
+        font-weight: 700;
+        horizontal-alignment: root.align;
+        overflow: elide;
+    }
+
+    if Player.audio-artist != "": Text {
+        text: Player.audio-artist;
+        color: Theme.text;
+        opacity: 0.85;
+        font-size: 15px;
+        horizontal-alignment: root.align;
+        overflow: elide;
+    }
+
+    if Player.audio-album != "": Text {
+        text: Player.audio-album;
+        color: Theme.muted;
+        font-size: 13px;
+        horizontal-alignment: root.align;
+        overflow: elide;
+    }
+
+    if Player.audio-tags.length > 0: HorizontalLayout {
+        padding-top: 6px;
+        spacing: 6px;
+        alignment: root.centered ? LayoutAlignment.center : LayoutAlignment.start;
+
+        for tag in Player.audio-tags: Tag {
+            text: tag;
+        }
+    }
+}
+
+component NextCard inherits Rectangle {
+    property <bool> has-next: Player.next-title != "";
+
+    height: 50px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.line;
+    background: #00000033;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 6px;
+        spacing: 10px;
+
+        VerticalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: 4px;
+                clip: true;
+                background: #ffffff0f;
+
+                if Player.has-next-cover && root.has-next: Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: Player.next-cover;
+                    image-fit: cover;
+                }
+
+                if !Player.has-next-cover || !root.has-next: Icon {
+                    width: 16px;
+                    height: 16px;
+                    viewbox: 24;
+                    tint: #ffffff4d;
+                    stroke-commands: Glyphs.note;
+                }
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 1px;
+
+            Text {
+                text: root.has-next ? "UP NEXT" : Player.repeat > 0 ? "STARTS OVER" : "END OF PLAYLIST";
+                color: Theme.muted;
+                font-size: 10px;
+                font-weight: 600;
+                letter-spacing: 0.6px;
+            }
+
+            if root.has-next || (Player.repeat > 0 && Player.shuffle): Text {
+                text: root.has-next ? Player.next-title : "In a new order";
+                color: Theme.text;
+                font-size: 12px;
+                overflow: elide;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            ShuffleButton {}
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            RepeatButton {}
+        }
+    }
 }
 
 // A pre-read cover is drawn here. Otherwise mpv draws its cover into the square itself, or the placeholder shows.
@@ -13,14 +162,51 @@ export component AudioView inherits Rectangle {
     in property <length> cover-x;
     in property <length> cover-y;
     in property <length> cover-size;
+    // Cover on the left and details on the right, for wide windows.
+    in property <bool> side;
+    in property <length> info-width;
 
-    if Player.has-cover-image: Image {
-        x: root.cover-x;
-        y: root.cover-y;
-        width: root.cover-size;
-        height: root.cover-size;
-        source: Player.cover-image;
-        image-fit: contain;
+    // Only behind a cover Slint draws, since it would cover one mpv draws underneath.
+    property <bool> ambient: Player.has-ambient && Player.has-cover-image;
+
+    clip: true;
+
+    if root.ambient: Image {
+        width: root.width;
+        height: root.height;
+        source: Player.ambient-image;
+        image-fit: cover;
+        opacity: 0.55;
+    }
+
+    if root.ambient: Rectangle {
+        background: @linear-gradient(180deg, Theme.backdrop.with-alpha(0.45) 0%, Theme.backdrop.with-alpha(0.92) 100%);
+    }
+
+    if Player.has-cover-image: Rectangle {
+        property <float> aspect: Player.cover-image.width / max(1, Player.cover-image.height);
+
+        width: root.cover-size * min(1, self.aspect);
+        height: root.cover-size * min(1, 1 / self.aspect);
+        x: root.cover-x + (root.cover-size - self.width) / 2;
+        y: root.cover-y + (root.cover-size - self.height) / 2;
+        border-radius: 10px;
+        background: Theme.panel;
+        drop-shadow-blur: 30px;
+        drop-shadow-offset-y: 12px;
+        drop-shadow-color: #00000099;
+
+        Rectangle {
+            border-radius: 10px;
+            clip: true;
+
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: Player.cover-image;
+                image-fit: cover;
+            }
+        }
     }
 
     if !Player.has-cover && !Player.has-cover-image: Rectangle {
@@ -42,39 +228,49 @@ export component AudioView inherits Rectangle {
         }
     }
 
-    VerticalLayout {
-        x: 0;
+    if !root.side: Details {
+        x: 24px;
         y: root.cover-y + root.cover-size + AudioLayout.info-gap;
-        width: root.width;
+        width: root.width - 48px;
         height: AudioLayout.info-height;
         alignment: start;
-        spacing: 2px;
-        padding-left: 24px;
-        padding-right: 24px;
+        centered: true;
+    }
 
-        Text {
-            text: Player.audio-title;
-            color: Theme.text;
-            font-size: 17px;
-            font-weight: 600;
-            horizontal-alignment: center;
-            overflow: elide;
+    if root.side: VerticalLayout {
+        x: root.cover-x + root.cover-size + AudioLayout.side-gap;
+        width: root.info-width;
+        alignment: center;
+        spacing: 4px;
+
+        Details {}
+
+        HorizontalLayout {
+            padding-top: 12px;
+            spacing: 6px;
+            alignment: start;
+
+            Text {
+                text: Player.format-time(Player.position);
+                color: Theme.text;
+                font-size: 15px;
+                font-weight: 600;
+            }
+
+            Text {
+                text: "of " + Player.format-time(Player.duration);
+                color: Theme.muted;
+                font-size: 13px;
+                vertical-alignment: bottom;
+            }
         }
 
-        if Player.audio-artist != "": Text {
-            text: Player.audio-artist;
-            color: Theme.muted;
-            font-size: 13px;
-            horizontal-alignment: center;
-            overflow: elide;
-        }
+        VerticalLayout {
+            padding-top: 16px;
 
-        if Player.audio-album != "": Text {
-            text: Player.audio-album;
-            color: Theme.muted;
-            font-size: 12px;
-            horizontal-alignment: center;
-            overflow: elide;
+            NextCard {
+                width: min(root.info-width, 340px);
+            }
         }
     }
 }

@@ -12,6 +12,7 @@ mod instance;
 mod media;
 mod mpv;
 mod opener;
+mod playlist;
 mod recorder;
 mod resume;
 mod settings;
@@ -65,6 +66,7 @@ const VIDEO_HEIGHT: u64 = 9;
 const VIDEO_FORMAT: u64 = 10;
 const AUDIO_CODEC: u64 = 11;
 const AUDIO_CHANNELS: u64 = 12;
+const AUDIO_SAMPLE_RATE: u64 = 29;
 const TRACK_LIST: u64 = 13;
 const PLAYLIST: u64 = 14;
 const PAUSED_FOR_CACHE: u64 = 15;
@@ -94,6 +96,9 @@ const STALLED_AFTER_SECS: u64 = 10;
 struct AudioInfo {
     codec: String,
     channels: i64,
+    sample_rate: i64,
+    // Only known from a pre-read, and only for lossless formats.
+    bit_depth: Option<u8>,
 }
 
 #[derive(Default)]
@@ -123,18 +128,6 @@ struct TrackLists {
     has_video: bool,
     has_cover: bool,
 }
-
-struct PlaylistRead {
-    items: Vec<PlaylistItem>,
-    next_title: String,
-    // The current file and its neighbors, nearest first, whose audio info is read ahead.
-    upcoming: Vec<String>,
-    files: Vec<String>,
-}
-
-// Next is where playback usually goes, previous is one key press away.
-const READ_AHEAD_NEXT: usize = 3;
-const READ_AHEAD_PREVIOUS: usize = 1;
 
 struct AudioTags {
     artist: String,
@@ -241,6 +234,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     observe_properties(&mpv)?;
     settings::wire(&mpv, &app, &config);
     volume::wire(&mpv, &saved_state);
+    playlist::wire(&app, &mpv, &saved_state);
     resume::wire(&app, &mpv, &config);
 
     let state = Arc::new(EventState { capture: Mutex::new(capture), ..Default::default() });
@@ -254,7 +248,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 show_pre_read(&app.global::<Player>(), &state, path);
             }
             // The playlist shows the titles that were just read.
-            read_in_background(&mpv, &app, &state.playlist_refresh, read_playlist, apply_playlist);
+            read_in_background(&mpv, &app, &state.playlist_refresh, playlist::read, playlist::apply);
         });
     });
     forward_mpv_events(&mpv, &app, &state)?;
@@ -349,6 +343,7 @@ fn observe_properties(mpv: &Mpv) -> Result<(), mpv::Error> {
     mpv.observe_string(VIDEO_FORMAT, "video-format")?;
     mpv.observe_string(AUDIO_CODEC, "audio-codec-name")?;
     mpv.observe_double(AUDIO_CHANNELS, "audio-params/channel-count")?;
+    mpv.observe_double(AUDIO_SAMPLE_RATE, "audio-params/samplerate")?;
     mpv.observe_changes(TRACK_LIST, "track-list")?;
     mpv.observe_changes(PLAYLIST, "playlist")?;
     mpv.observe_flag(PAUSED_FOR_CACHE, "paused-for-cache")?;
@@ -453,20 +448,26 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
             Event::PropertyChange { id: AUDIO_CODEC, value } => {
                 if let Ok(mut info) = state.audio.lock() {
                     info.codec = text(value);
-                    player.set_audio_badge(audio_badge(&info).into());
+                    show_audio_format(player, &info);
                 }
             }
             Event::PropertyChange { id: AUDIO_CHANNELS, value } => {
                 if let Ok(mut info) = state.audio.lock() {
                     info.channels = number(value).unwrap_or(0.0) as i64;
-                    player.set_audio_badge(audio_badge(&info).into());
+                    show_audio_format(player, &info);
+                }
+            }
+            Event::PropertyChange { id: AUDIO_SAMPLE_RATE, value } => {
+                if let Ok(mut info) = state.audio.lock() {
+                    info.sample_rate = number(value).unwrap_or(0.0) as i64;
+                    show_audio_format(player, &info);
                 }
             }
             Event::PropertyChange { id: TRACK_LIST, .. } => {
                 read_in_background(mpv, app, &state.track_refresh, read_tracks, apply_tracks);
             }
             Event::PropertyChange { id: PLAYLIST, .. } => {
-                read_in_background(mpv, app, &state.playlist_refresh, read_playlist, apply_playlist);
+                read_in_background(mpv, app, &state.playlist_refresh, playlist::read, playlist::apply);
             }
             Event::PropertyChange { id: CACHE_STATE, value } => {
                 let cache_state = match value {
@@ -567,12 +568,17 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                     byte_times.clear();
                 }
                 state.chapter_skip.lock().unwrap().reset();
+                // The pre-read of the new file sets it again, once it's shown.
+                if let Ok(mut info) = state.audio.lock() {
+                    info.bit_depth = None;
+                    show_audio_format(player, &info);
+                }
             }
             Event::EndFile { reason } => {
                 if reason == mpv::END_FILE_REASON_ERROR {
                     let path = state.path.lock().map(|path| path.clone()).unwrap_or_default();
-                    opener::load_failed(&path, !player.get_next_title().is_empty());
-                    read_in_background(mpv, app, &state.playlist_refresh, read_playlist, apply_playlist);
+                    opener::load_failed(&path, playlist::has_next());
+                    read_in_background(mpv, app, &state.playlist_refresh, playlist::read, playlist::apply);
                 }
             }
             Event::PlaybackRestart => {
@@ -681,6 +687,7 @@ fn forget_audio_view(player: &Player) {
     player.set_audio_only(false);
     player.set_has_cover(false);
     player.set_has_cover_image(false);
+    player.set_has_ambient(false);
 }
 
 // Shows a file's pre-read info as soon as it's cached, all at once and usually while mpv is still opening it.
@@ -695,11 +702,27 @@ fn show_pre_read(player: &Player, state: &EventState, path: &str) {
     if let Some(cover) = &info.cover {
         player.set_cover_image(slint::Image::from_rgba8(cover.clone()));
     }
-    player.set_audio_title(info.title.clone().unwrap_or_else(|| file_display_name(path)).into());
+    player.set_has_ambient(info.ambient.is_some());
+    if let Some(ambient) = &info.ambient {
+        player.set_ambient_image(slint::Image::from_rgba8(ambient.clone()));
+    }
+    player.set_audio_title(info.title.clone().unwrap_or_else(|| file_stem_name(path)).into());
     player.set_audio_artist(info.artist.as_str().into());
     player.set_audio_album(info.album_line.as_str().into());
+    if let Ok(mut audio) = state.audio.lock() {
+        audio.bit_depth = info.bit_depth;
+        show_audio_format(player, &audio);
+    }
     if let Ok(mut shown) = state.pre_read_path.lock() {
         *shown = path.to_string();
+    }
+}
+
+fn file_stem_name(path: &str) -> String {
+    let name = file_display_name(path);
+    match name.rsplit_once('.') {
+        Some((stem, _)) if !stem.is_empty() => stem.to_string(),
+        _ => name,
     }
 }
 
@@ -793,50 +816,6 @@ fn region_name(code: &str) -> String {
         other => return other.to_string(),
     };
     name.to_string()
-}
-
-fn read_playlist(mpv: &Mpv) -> PlaylistRead {
-    let count = mpv
-        .get_string("playlist/count")
-        .and_then(|count| count.parse::<usize>().ok())
-        .unwrap_or(0);
-    let (items, filenames): (Vec<PlaylistItem>, Vec<String>) = (0..count)
-        .map(|index| {
-            let field = |name: &str| mpv.get_string(&format!("playlist/{index}/{name}"));
-            let filename = field("filename").unwrap_or_default();
-            // mpv only knows a file's title once it has played it, so the pre-read one fills in before that.
-            let title = field("title")
-                .filter(|title| !title.is_empty())
-                .or_else(|| audio_info::title(&filename).flatten())
-                .unwrap_or_else(|| file_display_name(&filename));
-            let item = PlaylistItem {
-                title: title.into(),
-                current: field("current").as_deref() == Some("yes"),
-                failed: opener::has_failed(&filename),
-            };
-            (item, filename)
-        })
-        .unzip();
-    let current = items.iter().position(|item| item.current);
-    let next_title = current
-        .and_then(|current| items.get(current + 1))
-        .map(|item| item.title.to_string())
-        .unwrap_or_default();
-    let upcoming = current
-        .map(|current| {
-            let next = (current..filenames.len()).take(READ_AHEAD_NEXT + 1);
-            let previous = (0..current).rev().take(READ_AHEAD_PREVIOUS);
-            next.chain(previous).map(|index| filenames[index].clone()).collect()
-        })
-        .unwrap_or_default();
-    PlaylistRead { items, next_title, upcoming, files: filenames }
-}
-
-fn apply_playlist(player: &Player, playlist: PlaylistRead) {
-    audio_info::prefetch(playlist.upcoming);
-    audio_info::read_titles(&playlist.files);
-    player.set_next_title(playlist.next_title.into());
-    player.set_playlist(ModelRc::new(VecModel::from(playlist.items)));
 }
 
 // mpv matches metadata keys without case, and files mix "title", "Title" and "TITLE".
@@ -1026,20 +1005,57 @@ fn video_codec_label(format: &str) -> String {
     }
 }
 
-fn audio_badge(info: &AudioInfo) -> String {
-    audio_label(&info.codec, info.channels)
+fn show_audio_format(player: &Player, info: &AudioInfo) {
+    player.set_audio_badge(audio_label(&info.codec, info.channels).into());
+    player.set_audio_tags(ModelRc::new(VecModel::from(audio_tags(info))));
+}
+
+// The audio view's tags: codec, then bit depth, sample rate and channels where known.
+fn audio_tags(info: &AudioInfo) -> Vec<SharedString> {
+    let mut tags = Vec::new();
+    let codec = codec_name(&info.codec);
+    if !codec.is_empty() {
+        tags.push(codec);
+    }
+    if let Some(bits) = info.bit_depth {
+        tags.push(format!("{bits} bit"));
+    }
+    if info.sample_rate > 0 {
+        let kilohertz = info.sample_rate as f64 / 1000.0;
+        tags.push(format!("{} kHz", (kilohertz * 10.0).round() / 10.0));
+    }
+    let channels = match info.channels {
+        0 => String::new(),
+        1 => "Mono".into(),
+        2 => "Stereo".into(),
+        6 => "5.1".into(),
+        8 => "7.1".into(),
+        count => format!("{count} channels"),
+    };
+    if !channels.is_empty() {
+        tags.push(channels);
+    }
+    tags.into_iter().map(SharedString::from).collect()
+}
+
+fn codec_name(codec: &str) -> String {
+    match codec {
+        "aac" => "AAC".into(),
+        "ac3" => "AC-3".into(),
+        "eac3" => "E-AC-3".into(),
+        "truehd" => "TrueHD".into(),
+        "opus" => "Opus".into(),
+        "vorbis" => "Vorbis".into(),
+        "alac" => "ALAC".into(),
+        pcm if pcm.starts_with("pcm_") => "PCM".into(),
+        other => other.to_uppercase(),
+    }
 }
 
 fn audio_label(codec: &str, channels: i64) -> String {
     let codec = match codec {
         "" => return String::new(),
-        "aac" => "AAC".to_string(),
-        "ac3" => "AC-3".to_string(),
-        "eac3" => "E-AC-3".to_string(),
-        "truehd" => "TrueHD".to_string(),
-        "opus" => "Opus".to_string(),
-        "vorbis" => "Vorbis".to_string(),
-        other => other.to_uppercase(),
+        known => codec_name(known),
     };
     let layout = match channels {
         0 => return codec,
@@ -1287,8 +1303,6 @@ fn wire_playback(mpv: &Mpv, app: &AppWindow, osd: &Osd, config: &SharedConfig) {
     let audio_mpv = mpv.clone();
     player.on_select_audio(move |id| log_error(audio_mpv.command(&["set", "aid", &id.to_string()])));
 
-    let entry_mpv = mpv.clone();
-    player.on_play_entry(move |index| log_error(entry_mpv.command(&["playlist-play-index", &index.to_string()])));
 
     let (mute_mpv, mute_osd, app_weak) = (mpv.clone(), osd.clone(), app.as_weak());
     player.on_toggle_mute(move || {

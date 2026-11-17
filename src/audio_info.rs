@@ -16,6 +16,7 @@ use crate::media;
 const CACHE_SIZE: usize = 24;
 // Bigger than the cover square at 2x scale, so the cover stays sharp.
 const COVER_PIXELS: u32 = 640;
+const AMBIENT_PIXELS: u32 = 12;
 // The names mpv's cover-art-auto looks for next to the file.
 const COVER_NAMES: [&str; 8] = ["albumart", "album", "cover", "front", "albumartsmall", "folder", ".folder", "thumb"];
 const COVER_EXTENSIONS: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
@@ -24,8 +25,12 @@ const COVER_EXTENSIONS: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
 pub struct AudioInfo {
     pub title: Option<String>,
     pub artist: String,
+    // Album and year, or the file's type and size when it has neither artist nor album.
     pub album_line: String,
     pub cover: Option<SharedPixelBuffer<Rgba8Pixel>>,
+    // The cover shrunk to a few pixels. Stretched over the audio view, it looks like a heavy blur, which Slint lacks.
+    pub ambient: Option<SharedPixelBuffer<Rgba8Pixel>>,
+    pub bit_depth: Option<u8>,
 }
 
 enum Slot {
@@ -188,8 +193,9 @@ pub fn read_next(path: &str) {
     reader.wake.notify_one();
 }
 
-fn open(path: &Path, cover_art: bool) -> Option<TaggedFile> {
-    let options = ParseOptions::new().read_properties(false).read_cover_art(cover_art);
+// A full read also takes the properties for the bit depth. Title reads skip both.
+fn open(path: &Path, full: bool) -> Option<TaggedFile> {
+    let options = ParseOptions::new().read_properties(full).read_cover_art(full);
     Probe::open(path).ok()?.options(options).guess_file_type().ok()?.read().ok()
 }
 
@@ -217,13 +223,36 @@ fn read(path: &Path) -> Option<AudioInfo> {
         (Some(album), Some(year)) => format!("{album} · {year}"),
         (Some(album), None) => album,
         (None, Some(year)) => year,
+        (None, None) if artist.is_empty() => file_facts(path),
         (None, None) => String::new(),
     };
     let pictures: Vec<&Picture> = file.tags().iter().flat_map(|tag| tag.pictures()).collect();
     let front = pictures.iter().find(|picture| picture.pic_type() == PictureType::CoverFront);
     let embedded = front.or(pictures.first()).and_then(|picture| decode(picture.data()));
     let cover = embedded.or_else(|| cover_next_to(path));
-    Some(AudioInfo { title: text(ItemKey::TrackTitle), artist, album_line, cover })
+    let ambient = cover.as_ref().and_then(shrink);
+    let bit_depth = file.properties().bit_depth();
+    Some(AudioInfo { title: text(ItemKey::TrackTitle), artist, album_line, cover, ambient, bit_depth })
+}
+
+// For a file without tags, like "M4A · 3.1 MB".
+fn file_facts(path: &Path) -> String {
+    let extension = path.extension().map(|extension| extension.to_string_lossy().to_uppercase()).unwrap_or_default();
+    let size = std::fs::metadata(path).map(|metadata| metadata.len()).ok().map(|bytes| {
+        const MEGABYTE: f64 = 1024.0 * 1024.0;
+        if bytes as f64 >= MEGABYTE {
+            format!("{:.1} MB", bytes as f64 / MEGABYTE)
+        } else {
+            format!("{} KB", bytes.div_ceil(1024))
+        }
+    });
+    [Some(extension).filter(|extension| !extension.is_empty()), size].into_iter().flatten().collect::<Vec<_>>().join(" · ")
+}
+
+fn shrink(cover: &SharedPixelBuffer<Rgba8Pixel>) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+    let image = image::RgbaImage::from_raw(cover.width(), cover.height(), cover.as_bytes().to_vec())?;
+    let small = image::imageops::resize(&image, AMBIENT_PIXELS, AMBIENT_PIXELS, image::imageops::FilterType::Triangle);
+    Some(SharedPixelBuffer::clone_from_slice(small.as_raw(), small.width(), small.height()))
 }
 
 fn cover_next_to(path: &Path) -> Option<SharedPixelBuffer<Rgba8Pixel>> {

@@ -4,6 +4,8 @@ import { Clickable } from "clickable.slint";
 export component IconButton inherits Rectangle {
     in property <bool> enabled: true;
     in property <length> highlight-height: 34px;
+    // For toggles that are on.
+    in property <bool> active;
     callback clicked();
     callback right-clicked();
 
@@ -14,7 +16,7 @@ export component IconButton inherits Rectangle {
         width: root.width;
         height: root.highlight-height;
         border-radius: self.height / 2;
-        background: area.pressed ? Theme.pressed : area.has-hover ? Theme.hover : transparent;
+        background: area.pressed ? Theme.pressed : area.has-hover ? Theme.hover : root.active ? Theme.accent-soft : transparent;
         animate background { duration: Theme.hover-duration; }
     }
 
