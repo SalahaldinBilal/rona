@@ -2,3 +2,6 @@ target/
 /vendor
 /bundles
 /release-files
+/result
+.direnv
+.envrc
