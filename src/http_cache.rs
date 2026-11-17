@@ -340,7 +340,7 @@ impl HttpStream {
     // The usual failure is a connection the server closed while it sat idle, because mpv stops reading once its
     // buffer is full. So the first attempt is immediate, then it keeps trying with the last delay.
     fn reconnect(&mut self, index: u64, cancelled: &AtomicBool) -> Result<Option<Arc<[u8]>>, String> {
-        let mut delay = None;
+        let mut delay: Option<Duration> = None;
         let mut attempt = 0;
         loop {
             if let Some(delay) = delay {
