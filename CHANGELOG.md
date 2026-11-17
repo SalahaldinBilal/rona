@@ -5,6 +5,9 @@
 ### Changed
 - The remembered volume levels and the window's place and size are saved to `state.conf` instead of `settings.conf`, so the settings file only changes when you change a setting. Values saved by earlier versions carry over.
 
+### Fixed
+- A file you open now starts playing, even if the previous one was paused or the file was paused when you last left it.
+
 ## [0.1.1] - 2026-11-17
 
 ### Added

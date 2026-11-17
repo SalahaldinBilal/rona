@@ -424,6 +424,7 @@ impl Opener {
         player.set_media_title(info.name.into());
         player.set_ended(false);
         player.set_phase(Phase::Opening);
+        log_error(self.mpv.command(&["set", "pause", "no"]));
         self.loader.load(&self.mpv, paths);
     }
 

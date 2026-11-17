@@ -109,8 +109,7 @@ pub fn wire(app: &AppWindow, mpv: &Mpv, config: &SharedConfig) {
         .unwrap_or_default()
         .split(',')
         .map(str::trim)
-        // The volume is remembered per kind of file instead (volume.rs), and a saved one would override it.
-        .filter(|name| !name.is_empty() && !matches!(*name, "start" | "volume"))
+        .filter(|name| !name.is_empty() && *name != "start" && restored(name))
         .map(str::to_string)
         .collect();
 
@@ -131,6 +130,12 @@ pub fn wire(app: &AppWindow, mpv: &Mpv, config: &SharedConfig) {
         _timer: timer,
     };
     RESUME.with(|slot| *slot.borrow_mut() = Some(Rc::new(resume)));
+}
+
+// The volume is remembered per kind of file instead (volume.rs), and an opened file always plays.
+// Entries written before these were left out can still hold them.
+fn restored(name: &str) -> bool {
+    !matches!(name, "volume" | "pause")
 }
 
 /// mpv waits until the hook is continued, so this always continues it, even when resume is off.
@@ -167,7 +172,7 @@ impl Resume {
             .iter()
             .find(|entry| entry.key == key && policy.covers(entry.audio || media::is_audio_name(&key)))
             .map(|entry| entry.options.clone());
-        for (name, value) in saved.unwrap_or_default() {
+        for (name, value) in saved.unwrap_or_default().into_iter().filter(|(name, _)| restored(name)) {
             log_error(self.mpv.set_property(&format!("file-local-options/{name}"), &value));
         }
         let baseline = read_options(&self.mpv, &self.option_names);
