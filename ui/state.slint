@@ -202,6 +202,8 @@ export global Player {
     in property <FailureKind> failure-kind;
     in property <string> failure-title;
     in property <string> failure-detail;
+    // False until this file's track list is read, so audio-only and has-cover can't be trusted yet.
+    in property <bool> tracks-known;
     in property <bool> audio-only;
     in property <bool> has-cover;
     in property <string> audio-artist;

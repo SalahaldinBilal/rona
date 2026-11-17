@@ -104,7 +104,16 @@ impl VideoLayer {
         self.pending_size.is_some()
     }
 
-    pub fn draw(&mut self, window: (i32, i32), area: Area, picture: Option<Picture>) -> Result<(), String> {
+    /// `resize_now` skips the settle delay, for size changes that aren't a window being dragged.
+    /// `hold` keeps showing the frame already in the buffer. mpv keeps the new frame pending until it's rendered.
+    pub fn draw(
+        &mut self,
+        window: (i32, i32),
+        area: Area,
+        picture: Option<Picture>,
+        resize_now: bool,
+        hold: bool,
+    ) -> Result<(), String> {
         if window.0 <= 0 || window.1 <= 0 {
             return Ok(());
         }
@@ -112,8 +121,8 @@ impl VideoLayer {
             unsafe { self.clear_window(window) };
             return Ok(());
         }
-        let resized = self.follow_area_size((area.width, area.height), Instant::now())?;
-        if self.render_context.has_new_frame() || resized {
+        let resized = self.follow_area_size((area.width, area.height), Instant::now(), resize_now)?;
+        if !hold && (self.render_context.has_new_frame() || resized) {
             let rendered = match &self.target {
                 Target::Renderbuffer(_) => self.render_context.render(
                     self.framebuffer.0.get() as i32,
@@ -164,7 +173,7 @@ impl VideoLayer {
         !matches!(self.target, Target::Renderbuffer(_))
     }
 
-    fn follow_area_size(&mut self, target: (i32, i32), now: Instant) -> Result<bool, String> {
+    fn follow_area_size(&mut self, target: (i32, i32), now: Instant, resize_now: bool) -> Result<bool, String> {
         if target == self.size {
             self.pending_size = None;
             return Ok(false);
@@ -177,7 +186,7 @@ impl VideoLayer {
             }
         };
         let first_frame = self.size == (0, 0);
-        if !first_frame && now - since < RESIZE_SETTLE_DELAY {
+        if !first_frame && !resize_now && now - since < RESIZE_SETTLE_DELAY {
             return Ok(false);
         }
         unsafe { self.resize_target(target) }?;

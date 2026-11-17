@@ -468,6 +468,7 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                     player.set_phase(Phase::Idle);
                     player.set_media_title(SharedString::new());
                     player.set_ended(false);
+                    forget_audio_view(&player);
                 }
             }
             Event::PropertyChange { id: EOF_REACHED, value: Some(PropertyValue::Flag(reached)) } => {
@@ -486,13 +487,22 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                 }
             }
             Event::StartFile => {
+                // Going straight from one audio file to the next keeps the audio view and the old cover until
+                // the new file's tracks and tags replace them, instead of blanking the view in between.
+                let continuing_audio =
+                    player.get_audio_only() && matches!(player.get_phase(), Phase::Playing | Phase::Opening);
                 player.set_phase(Phase::Opening);
                 player.set_ended(false);
                 player.set_opening_stage("Connecting".into());
-                player.set_audio_only(false);
-                player.set_has_cover(false);
-                player.set_audio_artist(SharedString::new());
-                player.set_audio_album(SharedString::new());
+                // A read still running for the previous file must not mark this one's tracks as known.
+                state.track_refresh.fetch_add(1, Ordering::SeqCst);
+                player.set_tracks_known(false);
+                if !continuing_audio {
+                    player.set_audio_only(false);
+                    player.set_has_cover(false);
+                    player.set_audio_artist(SharedString::new());
+                    player.set_audio_album(SharedString::new());
+                }
                 http_cache::take_open_error();
                 if let Ok(mut started) = state.open_started.lock() {
                     *started = Some((Instant::now(), http_cache::downloaded_bytes()));
@@ -599,9 +609,21 @@ fn read_tracks(mpv: &Mpv) -> TrackLists {
     TrackLists { subtitles, audio, has_video, has_cover }
 }
 
+/// Once nothing plays, the next file must not pick up this one's audio view and cover.
+fn forget_audio_view(player: &Player) {
+    player.set_audio_only(false);
+    player.set_has_cover(false);
+}
+
 fn apply_tracks(player: &Player, tracks: TrackLists) {
-    player.set_audio_only(!tracks.has_video && !tracks.audio.is_empty());
-    player.set_has_cover(tracks.has_cover && !tracks.has_video);
+    // mpv empties the list while switching files. That says nothing about the new file, and must not end the
+    // audio view that stays up between two audio files.
+    let known = tracks.has_video || !tracks.audio.is_empty();
+    player.set_tracks_known(known);
+    if known {
+        player.set_audio_only(!tracks.has_video);
+        player.set_has_cover(tracks.has_cover && !tracks.has_video);
+    }
     player.set_subtitles_off(!tracks.subtitles.iter().any(|track| track.selected));
     player.set_subtitle_tracks(ModelRc::new(VecModel::from(tracks.subtitles)));
     player.set_audio_tracks(ModelRc::new(VecModel::from(tracks.audio)));
@@ -1002,6 +1024,7 @@ fn attach_video(
     let mpv = mpv.clone();
     let app_weak = app.as_weak();
     let mut video: Option<VideoLayer> = None;
+    let mut showed_cover = false;
 
     app.window().set_rendering_notifier(move |state, graphics_api| match state {
         RenderingState::RenderingSetup => {
@@ -1033,8 +1056,15 @@ fn attach_video(
                 let size = window.size();
                 let scale = window.scale_factor();
                 let player = app.global::<Player>();
-                let showing_cover =
-                    player.get_phase() == Phase::Playing && player.get_audio_only() && player.get_has_cover();
+                // Not tied to the phase, so mpv already renders the cover at its size behind the load screen.
+                // Between two audio files these still describe the previous one, so its cover keeps its square.
+                let showing_cover = player.get_audio_only() && player.get_has_cover();
+                // Until the new file's tracks are known its first frame could be anything, and until playback
+                // starts mpv may have no frame yet and would render black, so the old frame stays.
+                let hold_frame = !player.get_tracks_known() || player.get_phase() == Phase::Opening;
+                // Switching between the video area and the cover is not a window resize, so it doesn't wait to settle.
+                let switched_area = showing_cover != showed_cover;
+                showed_cover = showing_cover;
                 let area = if showing_cover {
                     let size = (app.get_cover_size() * scale).round() as i32;
                     Area {
@@ -1053,7 +1083,7 @@ fn attach_video(
                 };
                 let window_size = (size.width as i32, size.height as i32);
                 let picture = *event_state.picture.lock().unwrap();
-                log_error(video.draw(window_size, area, picture));
+                log_error(video.draw(window_size, area, picture, switched_area, hold_frame));
                 capture_shown_frame(video, window_size, area, &event_state, &app_weak);
                 if video.resize_pending() {
                     schedule_video_redraw(&app_weak);

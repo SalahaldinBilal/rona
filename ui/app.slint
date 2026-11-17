@@ -48,8 +48,15 @@ export component AppWindow inherits Window {
     out property <length> cover-y: root.video-y
         + (root.video-height - root.cover-size - AudioLayout.info-gap - AudioLayout.info-height) / 2;
 
+    // Opening right after an audio file keeps the audio view, with the old cover until the new one is drawn.
+    property <bool> audio-view-shown: Player.audio-only
+        && (Player.phase == Phase.playing || Player.phase == Phase.opening);
+
     // The last frame of a previous file stays in mpv's buffer, so anything that isn't a picture hides it.
-    property <bool> hide-video: Player.phase != Phase.playing || (Player.audio-only && !Player.has-cover);
+    // Until the track list is known, a file's first frame would show in the wrong place.
+    property <bool> hide-video: root.audio-view-shown
+        ? !Player.has-cover
+        : Player.phase != Phase.playing || !Player.tracks-known;
 
     property <bool> playing: Player.phase == Phase.playing;
     changed playing => {
@@ -139,6 +146,7 @@ export component AppWindow inherits Window {
     }
 
     AudioView {
+        visible: root.audio-view-shown;
         x: 0;
         y: root.video-y;
         width: root.video-width;

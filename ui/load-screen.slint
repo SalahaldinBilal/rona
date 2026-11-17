@@ -55,7 +55,9 @@ export component CheckingScreen inherits Delayed {
 export component OpeningScreen inherits Delayed {
     property <bool> slow: Player.slow-seconds > 0;
 
-    show: Player.phase == Phase.opening;
+    // Right after an audio file the audio view stays up instead, unless the open gets slow.
+    show: Player.phase == Phase.opening && (!Player.audio-only || root.slow);
+    background: Player.audio-only ? black : transparent;
 
     VerticalLayout {
         alignment: center;

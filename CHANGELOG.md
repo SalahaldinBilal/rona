@@ -10,6 +10,8 @@
 - When some of the files or links you open can't be played, a message says how many were skipped.
 
 ### Fixed
+- An audio file's cover no longer flashes at full size before shrinking to its place.
+- Moving from one audio file to the next updates the cover and tags in place instead of blanking the view for a moment.
 - Dragging files onto the window plays them again.
 - Ctrl+V plays files copied in Explorer or a file manager, not only copied paths and links.
 - Several files on the command line all go into the playlist, not just the first. Links given together with files are no longer dropped.

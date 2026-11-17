@@ -11,7 +11,7 @@ use slint::{ComponentHandle, SharedString, Timer, TimerMode};
 use crate::http_cache::{self, ConnectionState};
 use crate::media::{self, FileCheck, LinkCheck};
 use crate::mpv::Mpv;
-use crate::{AppWindow, DragState, FailureKind, Osd, Panels, Phase, Player, log_error};
+use crate::{AppWindow, DragState, FailureKind, Osd, Panels, Phase, Player, forget_audio_view, log_error};
 
 #[derive(Clone)]
 enum Source {
@@ -547,12 +547,14 @@ fn show_failure(player: &Player, kind: FailureKind, title: &str, detail: &str, w
     player.set_source_is_link(is_link);
     player.set_ended(false);
     player.set_phase(Phase::Failed);
+    forget_audio_view(player);
 }
 
 fn show_idle(player: &Player) {
     player.set_phase(Phase::Idle);
     player.set_media_title(SharedString::new());
     player.set_ended(false);
+    forget_audio_view(player);
 }
 
 fn clipboard_text() -> Option<String> {

@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { Player, Phase } from "state.slint";
+import { Player } from "state.slint";
 import { Icon } from "components/icon.slint";
 import { Glyphs } from "components/screen-parts.slint";
 
@@ -13,8 +13,6 @@ export component AudioView inherits Rectangle {
     in property <length> cover-x;
     in property <length> cover-y;
     in property <length> cover-size;
-
-    visible: Player.phase == Phase.playing && Player.audio-only;
 
     if !Player.has-cover: Rectangle {
         x: root.cover-x;
