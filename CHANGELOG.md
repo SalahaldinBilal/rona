@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- "Resume audio where I left off" setting, off by default. Resuming audio and video are now separate options, and audio starts from the beginning unless this one is on.
 - `--new-instance` starts a separate window even while Rona is already open.
 
 ### Changed

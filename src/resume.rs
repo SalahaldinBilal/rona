@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use slint::{ComponentHandle, Timer, TimerMode};
 
+use crate::media;
 use crate::mpv::Mpv;
 use crate::settings::{self, SharedConfig};
 use crate::{AppWindow, Phase, Player, http_cache, log_error, percent_decode};
@@ -21,11 +22,14 @@ const END_MARGIN_SECONDS: f64 = 30.0;
 const END_MARGIN_FRACTION: f64 = 0.05;
 const MIN_DURATION: f64 = 120.0;
 const MAX_ENTRIES: usize = 1000;
+const AUDIO_MARK: &str = "audio";
 
 struct Entry {
     key: String,
     // Unix seconds of the last save, used to forget entries after the configured number of days.
     written: u64,
+    // Marks a saved position as an audio file's, so it's skipped while audio positions are off.
+    audio: bool,
     options: Vec<(String, String)>,
 }
 
@@ -40,7 +44,22 @@ struct Snapshot {
     position: Option<f64>,
     duration: Option<f64>,
     finished: bool,
+    audio: bool,
     options: Vec<(String, String)>,
+}
+
+// The settings a save needs, copied so a save on another thread doesn't touch the config.
+#[derive(Clone, Copy)]
+struct Policy {
+    max_age: Duration,
+    videos: bool,
+    audio: bool,
+}
+
+impl Policy {
+    fn covers(&self, audio: bool) -> bool {
+        if audio { self.audio } else { self.videos }
+    }
 }
 
 #[derive(Default)]
@@ -134,16 +153,21 @@ pub fn save_soon() {
 
 impl Resume {
     fn enabled(&self) -> bool {
-        self.config.borrow().resume
+        let config = self.config.borrow();
+        config.resume || config.resume_audio
     }
 
+    // Tracks aren't known yet while loading, so audio is told apart by the entry's mark or the file name.
     fn file_loading(&self) {
         let key = key_of(&self.mpv.get_string("stream-open-filename").unwrap_or_default());
-        if self.enabled() {
-            let saved = lock(&self.store).entries.iter().find(|entry| entry.key == key).map(|entry| entry.options.clone());
-            for (name, value) in saved.unwrap_or_default() {
-                log_error(self.mpv.set_property(&format!("file-local-options/{name}"), &value));
-            }
+        let policy = policy(&self.config);
+        let saved = lock(&self.store)
+            .entries
+            .iter()
+            .find(|entry| entry.key == key && policy.covers(entry.audio || media::is_audio_name(&key)))
+            .map(|entry| entry.options.clone());
+        for (name, value) in saved.unwrap_or_default() {
+            log_error(self.mpv.set_property(&format!("file-local-options/{name}"), &value));
         }
         let baseline = read_options(&self.mpv, &self.option_names);
         lock(&self.store).current = Some(Current { key, baseline });
@@ -156,19 +180,19 @@ impl Resume {
             return;
         }
         let snapshot = read_snapshot(&self.mpv, &self.option_names);
-        record_and_write(&self.store, snapshot, max_age(&self.config));
+        record_and_write(&self.store, snapshot, policy(&self.config));
     }
 
     fn save_in_background(&self) {
         if !self.enabled() || self.saving.swap(true, Ordering::SeqCst) {
             return;
         }
-        let max_age = max_age(&self.config);
+        let policy = policy(&self.config);
         let (mpv, store, names, saving) =
             (self.mpv.clone(), self.store.clone(), self.option_names.clone(), self.saving.clone());
         std::thread::spawn(move || {
             let snapshot = read_snapshot(&mpv, &names);
-            record_and_write(&store, snapshot, max_age);
+            record_and_write(&store, snapshot, policy);
             saving.store(false, Ordering::SeqCst);
         });
     }
@@ -209,13 +233,20 @@ fn read_snapshot(mpv: &Mpv, names: &[String]) -> Option<Snapshot> {
     let position = number("time-pos");
     let duration = number("duration");
     let finished = mpv.get_string("eof-reached").as_deref() == Some("yes");
+    // No video track, or only cover art, is an audio file.
+    let audio = mpv.get_string("current-tracks/video/albumart").is_none_or(|albumart| albumart == "yes");
     let options = read_options(mpv, names);
     let after = mpv.get_string("path")?;
-    (before == after).then(|| Snapshot { key: key_of(&before), position, duration, finished, options })
+    (before == after).then(|| Snapshot { key: key_of(&before), position, duration, finished, audio, options })
 }
 
 fn max_age(config: &SharedConfig) -> Duration {
     Duration::from_secs(u64::from(config.borrow().resume_days) * 24 * 60 * 60)
+}
+
+fn policy(config: &SharedConfig) -> Policy {
+    let settings = config.borrow();
+    Policy { max_age: max_age(config), videos: settings.resume, audio: settings.resume_audio }
 }
 
 fn now_seconds() -> u64 {
@@ -227,8 +258,8 @@ fn forget_old(entries: &mut Vec<Entry>, max_age: Duration) {
     entries.retain(|entry| entry.written >= oldest_kept);
 }
 
-fn record_and_write(store: &Mutex<Store>, snapshot: Option<Snapshot>, max_age: Duration) {
-    let Some(snapshot) = snapshot else { return };
+fn record_and_write(store: &Mutex<Store>, snapshot: Option<Snapshot>, policy: Policy) {
+    let Some(snapshot) = snapshot.filter(|snapshot| policy.covers(snapshot.audio)) else { return };
     let mut store = lock(store);
     let Some(current) = store.current.as_ref().filter(|current| current.key == snapshot.key) else { return };
 
@@ -256,9 +287,9 @@ fn record_and_write(store: &Mutex<Store>, snapshot: Option<Snapshot>, max_age: D
         store.entries.remove(index);
     }
     if !options.is_empty() {
-        store.entries.push(Entry { key: snapshot.key, written: now_seconds(), options });
+        store.entries.push(Entry { key: snapshot.key, written: now_seconds(), audio: snapshot.audio, options });
     }
-    forget_old(&mut store.entries, max_age);
+    forget_old(&mut store.entries, policy.max_age);
     let overflow = store.entries.len().saturating_sub(MAX_ENTRIES);
     store.entries.drain(..overflow);
     if let Some(file) = store.file.clone() {
@@ -282,7 +313,8 @@ fn resume_position(snapshot: &Snapshot) -> Option<f64> {
     Some(position)
 }
 
-// One entry per line: key, time last written, then name=value pairs, all tab separated.
+// One entry per line: key, time last written, then name=value pairs, all tab separated. A bare `audio` field
+// marks an audio file.
 fn escape(text: &str) -> String {
     text.replace('%', "%25").replace('\t', "%09").replace('\n', "%0A").replace('\r', "%0D")
 }
@@ -302,11 +334,15 @@ fn load_entries(file: &PathBuf) -> Vec<Entry> {
             let mut fields = line.split('\t');
             let key = percent_decode(fields.next().filter(|key| !key.is_empty())?);
             let written = fields.next()?.parse().ok()?;
+            let mut audio = false;
             let options = fields
-                .filter_map(|field| field.split_once('='))
+                .filter_map(|field| {
+                    audio |= field == AUDIO_MARK;
+                    field.split_once('=')
+                })
                 .map(|(name, value)| (percent_decode(name), percent_decode(value)))
                 .collect();
-            Some(Entry { key, written, options })
+            Some(Entry { key, written, audio, options })
         })
         .collect();
     entries.sort_by_key(|entry| entry.written);
@@ -320,6 +356,10 @@ fn write_entries(file: &PathBuf, entries: &[Entry]) {
         text.push_str(&escape(&entry.key));
         text.push('\t');
         text.push_str(&entry.written.to_string());
+        if entry.audio {
+            text.push('\t');
+            text.push_str(AUDIO_MARK);
+        }
         for (name, value) in &entry.options {
             text.push('\t');
             text.push_str(&escape(name));
@@ -344,7 +384,37 @@ mod tests {
     use super::*;
 
     fn snapshot(position: f64, duration: f64, finished: bool) -> Snapshot {
-        Snapshot { key: String::new(), position: Some(position), duration: Some(duration), finished, options: Vec::new() }
+        Snapshot {
+            key: String::new(),
+            position: Some(position),
+            duration: Some(duration),
+            finished,
+            audio: false,
+            options: Vec::new(),
+        }
+    }
+
+    fn saved_start(audio: bool, videos_on: bool, audio_on: bool) -> Option<String> {
+        let key = r"c:\users\someone\music\album\07 - long track.flac".to_string();
+        let store = Mutex::new(Store {
+            file: None,
+            entries: Vec::new(),
+            current: Some(Current { key: key.clone(), baseline: Vec::new() }),
+        });
+        let snapshot = Snapshot { key, audio, ..snapshot(400.0, 1500.0, false) };
+        let policy = Policy { max_age: Duration::from_secs(3 * 24 * 3600), videos: videos_on, audio: audio_on };
+        record_and_write(&store, Some(snapshot), policy);
+        let store = lock(&store);
+        let entry = store.entries.first()?;
+        entry.options.iter().find(|(name, _)| name == "start").map(|(_, value)| value.clone())
+    }
+
+    #[test]
+    fn audio_and_videos_each_follow_their_own_option() {
+        assert_eq!(saved_start(true, true, false), None);
+        assert_eq!(saved_start(true, false, true).as_deref(), Some("400.000"));
+        assert_eq!(saved_start(false, true, false).as_deref(), Some("400.000"));
+        assert_eq!(saved_start(false, false, true), None);
     }
 
     #[test]
@@ -370,6 +440,7 @@ mod tests {
         let entries = vec![Entry {
             key: "https://cdn.example.com/a%20b.mkv?token=x\ty".into(),
             written: 42,
+            audio: true,
             options: vec![("start".into(), "61.500".into()), ("af".into(), "lavfi=[dynaudnorm]\t%".into())],
         }];
         write_entries(&file, &entries);
@@ -377,13 +448,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].key, entries[0].key);
+        assert!(loaded[0].audio);
         assert_eq!(loaded[0].options, entries[0].options);
     }
 
     #[test]
     fn entries_older_than_the_limit_are_forgotten() {
         let now = now_seconds();
-        let entry = |key: &str, age_hours: u64| Entry { key: key.into(), written: now - age_hours * 3600, options: Vec::new() };
+        let entry = |key: &str, age_hours: u64| Entry {
+            key: key.into(),
+            written: now - age_hours * 3600,
+            audio: false,
+            options: Vec::new(),
+        };
         let mut entries = vec![entry("old", 80), entry("recent", 70), entry("today", 1)];
         forget_old(&mut entries, Duration::from_secs(3 * 24 * 3600));
         let kept: Vec<&str> = entries.iter().map(|entry| entry.key.as_str()).collect();

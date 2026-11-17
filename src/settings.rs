@@ -48,6 +48,7 @@ pub struct WindowGeometry {
 #[derive(Clone, PartialEq)]
 pub struct Config {
     pub resume: bool,
+    pub resume_audio: bool,
     pub resume_days: u32,
     pub start_volume: u32,
     pub end_action: usize,
@@ -101,6 +102,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             resume: true,
+            resume_audio: false,
             resume_days: 3,
             start_volume: 100,
             end_action: 1,
@@ -188,6 +190,7 @@ impl Config {
         match page {
             0 => {
                 self.resume = defaults.resume;
+                self.resume_audio = defaults.resume_audio;
                 self.resume_days = defaults.resume_days;
                 self.start_volume = defaults.start_volume;
                 self.end_action = defaults.end_action;
@@ -277,6 +280,7 @@ impl Config {
     fn entries(&self) -> Vec<(String, String)> {
         let mut entries: Vec<(String, String)> = [
             ("resume", yes_no(self.resume)),
+            ("resume-audio", yes_no(self.resume_audio)),
             ("resume-days", self.resume_days.to_string()),
             ("start-volume", self.start_volume.to_string()),
             ("end-action", END_ACTIONS[self.end_action].into()),
@@ -339,6 +343,7 @@ impl Config {
     fn set(&mut self, name: &str, value: &str) {
         match name {
             "resume" => set_flag(&mut self.resume, value),
+            "resume-audio" => set_flag(&mut self.resume_audio, value),
             "resume-days" => set_number(&mut self.resume_days, value, |days| *days > 0),
             "start-volume" => set_number(&mut self.start_volume, value, |volume| *volume <= 100),
             "end-action" => set_choice(&mut self.end_action, value, &END_ACTIONS),
@@ -593,6 +598,7 @@ fn renderer_index(renderer: usize) -> i32 {
 
 fn write_ui(ui: &SettingsUi, config: &Config, devices: &[AudioDevice]) {
     ui.set_resume(config.resume);
+    ui.set_resume_audio(config.resume_audio);
     ui.set_resume_days(config.resume_days.to_string().into());
     ui.set_start_volume(config.start_volume as f32);
     ui.set_end_action(config.end_action as i32);
@@ -645,6 +651,7 @@ fn read_ui(ui: &SettingsUi, config: &mut Config, devices: &[AudioDevice]) {
     let index = |value: i32, count: usize| (value.max(0) as usize).min(count - 1);
 
     config.resume = ui.get_resume();
+    config.resume_audio = ui.get_resume_audio();
     set_number(&mut config.resume_days, &ui.get_resume_days(), |days| *days > 0);
     config.start_volume = ui.get_start_volume().round().clamp(0.0, 100.0) as u32;
     config.end_action = index(ui.get_end_action(), END_ACTIONS.len());

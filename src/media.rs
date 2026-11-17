@@ -27,6 +27,11 @@ pub fn is_media_name(path: &str) -> bool {
     VIDEO_EXTENSIONS.contains(&extension.as_str()) || AUDIO_EXTENSIONS.contains(&extension.as_str())
 }
 
+pub fn is_audio_name(path: &str) -> bool {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    name.rsplit_once('.').is_some_and(|(_, extension)| AUDIO_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()))
+}
+
 #[derive(Debug, PartialEq)]
 pub enum LinkError {
     NotALink,

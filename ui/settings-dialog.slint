@@ -95,8 +95,14 @@ component PlaybackPage inherits Page {
     SectionHeading { text: "ON OPEN"; }
 
     Checkbox {
-        text: "Resume where I left off";
+        text: "Resume videos where I left off";
         checked <=> Settings.resume;
+        toggled => { Settings.changed(); }
+    }
+
+    Checkbox {
+        text: "Resume audio where I left off";
+        checked <=> Settings.resume-audio;
         toggled => { Settings.changed(); }
     }
 
@@ -106,7 +112,7 @@ component PlaybackPage inherits Page {
         NumberField {
             text <=> Settings.resume-days;
             whole: true;
-            enabled: Settings.resume;
+            enabled: Settings.resume || Settings.resume-audio;
         }
         Unit { text: "days"; }
         Rectangle { horizontal-stretch: 1; }
