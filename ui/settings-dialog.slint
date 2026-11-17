@@ -1,10 +1,11 @@
 import { Theme } from "theme.slint";
-import { Panels, Settings, Updates, UpdatePhase } from "state.slint";
+import { Panels, Settings, Updates, UpdatePhase, ThemeProfiles, ColorText } from "state.slint";
 import { Icon } from "components/icon.slint";
+import { Glyphs } from "components/screen-parts.slint";
 import { IconButton } from "components/buttons.slint";
 import { Clickable } from "components/clickable.slint";
 import { Dot } from "components/dot.slint";
-import { TextField, Checkbox, Segmented, Select, Slider, ColorChoice, TextButton } from "components/form.slint";
+import { TextField, Checkbox, Segmented, Select, Slider, ColorChoice, ColorField, TextButton } from "components/form.slint";
 
 component SectionHeading inherits Text {
     color: Theme.muted;
@@ -498,6 +499,132 @@ component InterfacePage inherits Page {
     }
 }
 
+component ThemePage inherits Page {
+    property <bool> editable: ThemeProfiles.current > 0;
+    property <int> current: ThemeProfiles.current;
+    property <bool> delete-armed;
+    changed current => { self.delete-armed = false; }
+
+    SectionHeading { text: "PROFILE"; }
+
+    LabeledRow {
+        label: "Profile";
+
+        Select {
+            horizontal-stretch: 1;
+            options: ThemeProfiles.names;
+            current-index <=> ThemeProfiles.current;
+            selected => { ThemeProfiles.select(self.current-index); }
+        }
+    }
+
+    LabeledRow {
+        label: "Name";
+
+        TextField {
+            horizontal-stretch: 1;
+            text <=> ThemeProfiles.current-name;
+            enabled: root.editable;
+            valid: ThemeProfiles.valid-name(self.draft);
+            edited => { ThemeProfiles.rename(self.text); }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+
+        TextButton {
+            text: "New profile";
+            clicked => { ThemeProfiles.create(); }
+        }
+
+        TextButton {
+            text: root.delete-armed ? "Click again to delete" : "Delete";
+            danger: root.delete-armed;
+            enabled: root.editable;
+            clicked => {
+                if (root.delete-armed) {
+                    root.delete-armed = false;
+                    ThemeProfiles.delete();
+                } else {
+                    root.delete-armed = true;
+                }
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    InfoText {
+        text: root.editable
+            ? "Changes apply right away. A new profile starts as a copy of the one shown."
+            : "The default theme can't be changed. Make a new profile to start from it.";
+    }
+
+    for item[index] in ThemeProfiles.items: VerticalLayout {
+        spacing: 10px;
+
+        if item.heading != "": VerticalLayout {
+            spacing: 10px;
+
+            Gap {}
+            SectionHeading { text: item.heading; }
+        }
+
+        LabeledRow {
+            label: item.label;
+
+            if item.is-color: ColorField {
+                width: 192px;
+                value <=> item.swatch;
+                enabled: root.editable;
+                edited => { ThemeProfiles.set-value(index, ColorText.format(self.value)); }
+            }
+
+            if !item.is-color: HorizontalLayout {
+                width: 192px;
+                spacing: 10px;
+
+                Rectangle { width: 22px; }
+
+                TextField {
+                    text <=> item.value;
+                    enabled: root.editable;
+                    valid: ThemeProfiles.valid-value(index, self.draft);
+                    edited => { ThemeProfiles.set-value(index, self.text); }
+                }
+            }
+
+            Unit {
+                width: 20px;
+                text: item.unit;
+            }
+
+            VerticalLayout {
+                alignment: center;
+
+                IconButton {
+                    width: 30px;
+                    height: 30px;
+                    highlight-height: 30px;
+                    opacity: item.overridden ? 1 : 0;
+                    enabled: item.overridden && root.editable;
+                    clicked => { ThemeProfiles.revert(index); }
+
+                    Icon {
+                        width: 15px;
+                        height: 15px;
+                        viewbox: 24;
+                        stroke-commands: Glyphs.replay;
+                    }
+                }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+}
+
 component ShortcutRow inherits Rectangle {
     in property <string> action;
     in property <string> key;
@@ -743,7 +870,7 @@ component NavItem inherits Rectangle {
 export component SettingsDialog inherits Rectangle {
     // In Panels, so the update banner can open the dialog on the Updates page.
     property <int> page <=> Panels.settings-page;
-    property <[string]> pages: ["Playback", "Video", "Audio", "Subtitles", "Streaming", "Interface", "Shortcuts", "Updates"];
+    property <[string]> pages: ["Playback", "Video", "Audio", "Subtitles", "Streaming", "Interface", "Theme", "Shortcuts", "Updates"];
 
     background: #00000080;
 
@@ -823,7 +950,7 @@ export component SettingsDialog inherits Rectangle {
                         for name[index] in root.pages: NavItem {
                             text: name;
                             selected: index == root.page;
-                            dot: index == 7 && Updates.has-release;
+                            dot: index == 8 && Updates.has-release;
                             clicked => {
                                 root.page = index;
                                 Settings.capturing = -1;
@@ -850,8 +977,9 @@ export component SettingsDialog inherits Rectangle {
                     if root.page == 3: SubtitlesPage {}
                     if root.page == 4: StreamingPage {}
                     if root.page == 5: InterfacePage {}
-                    if root.page == 6: ShortcutsPage {}
-                    if root.page == 7: UpdatesPage {}
+                    if root.page == 6: ThemePage {}
+                    if root.page == 7: ShortcutsPage {}
+                    if root.page == 8: UpdatesPage {}
                 }
             }
 
@@ -883,7 +1011,14 @@ export component SettingsDialog inherits Rectangle {
                         TextButton {
                             width: 130px;
                             text: "Reset this page";
-                            clicked => { Settings.reset-page(root.page); }
+                            enabled: root.page != 6 || ThemeProfiles.current > 0;
+                            clicked => {
+                                if (root.page == 6) {
+                                    ThemeProfiles.revert-all();
+                                } else {
+                                    Settings.reset-page(root.page);
+                                }
+                            }
                         }
                     }
 

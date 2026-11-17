@@ -35,6 +35,46 @@ export struct ShortcutItem {
     key: string,
 }
 
+export struct ParsedColor {
+    valid: bool,
+    color: color,
+}
+
+// Color text is read and written in Rust (src/color.rs), which knows more formats than Slint.
+export global ColorText {
+    pure callback parse(string) -> ParsedColor;
+    pure callback format(color) -> string;
+}
+
+export struct ThemeItem {
+    label: string,
+    // Set on the first value of each group, which then starts with this heading.
+    heading: string,
+    unit: string,
+    value: string,
+    is-color: bool,
+    swatch: color,
+    overridden: bool,
+}
+
+export global ThemeProfiles {
+    // "Default" first, then the saved profiles.
+    in property <[string]> names;
+    in-out property <int> current;
+    in-out property <string> current-name;
+    in property <[ThemeItem]> items;
+
+    callback select(int);
+    callback create();
+    callback delete();
+    callback rename(string);
+    pure callback valid-name(string) -> bool;
+    pure callback valid-value(int, string) -> bool;
+    callback set-value(int, string);
+    callback revert(int);
+    callback revert-all();
+}
+
 export global Panels {
     in-out property <bool> tracks-open;
     in-out property <bool> playlist-open;

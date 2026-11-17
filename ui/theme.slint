@@ -1,22 +1,23 @@
+// These values are the default theme. Rust overrides them from the theme profile (src/theme.rs lists each one).
 export global Theme {
-    out property <color> chrome: #17181d;
-    out property <color> panel: #1d1e24;
+    in-out property <color> chrome: #17181d;
+    in-out property <color> panel: #1d1e24;
     // Behind anything that isn't a video picture. Rust reads it for the area around an audio file's cover.
-    out property <color> backdrop: #1e2026;
-    out property <color> line: #ffffff10;
-    out property <color> line-hover: #ffffff2e;
-    out property <color> hover: #ffffff17;
-    out property <color> pressed: #ffffff24;
-    out property <color> text: #f1f1f4;
-    out property <color> muted: #ffffff8c;
-    out property <color> accent: #6ea8ff;
-    out property <color> accent-hover: #84b6ff;
-    out property <color> accent-soft: #6ea8ff29;
-    out property <color> danger: #e5484d;
-    out property <color> warning: #f2c94c;
-    out property <color> on-warning: #1f1a0c;
-    out property <length> title-height: 36px;
-    out property <length> controls-height: 57px;
-    out property <duration> hover-duration: 75ms;
-    out property <duration> fade-duration: 100ms;
+    in-out property <color> backdrop: #1e2026;
+    in-out property <color> line: #ffffff10;
+    in-out property <color> line-hover: #ffffff2e;
+    in-out property <color> hover: #ffffff17;
+    in-out property <color> pressed: #ffffff24;
+    in-out property <color> text: #f1f1f4;
+    in-out property <color> muted: #ffffff8c;
+    in-out property <color> accent: #6ea8ff;
+    in-out property <color> accent-hover: #84b6ff;
+    in-out property <color> accent-soft: #6ea8ff29;
+    in-out property <color> danger: #e5484d;
+    in-out property <color> warning: #f2c94c;
+    in-out property <color> on-warning: #1f1a0c;
+    in-out property <length> title-height: 36px;
+    in-out property <length> controls-height: 57px;
+    in-out property <duration> hover-duration: 75ms;
+    in-out property <duration> fade-duration: 100ms;
 }

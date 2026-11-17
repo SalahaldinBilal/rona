@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Theme page in Settings with theme profiles. A profile can change every color, the bar heights and the animation timings, and any value can be reverted to the default on its own. Colors have a picker with transparency, and the color field also takes pasted `rgb()`, `hsl()` and short hex colors. The default theme can't be changed, a new profile starts as a copy of the one shown. Profiles are saved as files in the `themes` folder next to `settings.conf`.
 - V hides or shows subtitles without turning the track off. It can be changed under Shortcuts in Settings. "Show hidden subtitles again on the next file" (Subtitles settings, on by default) decides whether they stay hidden when the next file starts.
 
 ### Changed

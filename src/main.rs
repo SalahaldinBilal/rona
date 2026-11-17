@@ -5,6 +5,7 @@ mod audio_info;
 mod buffered;
 mod capture;
 mod chapter_skip;
+mod color;
 mod extensions;
 mod http_cache;
 mod instance;
@@ -16,6 +17,7 @@ mod resume;
 mod settings;
 mod shortcuts;
 mod state;
+mod theme;
 mod updater;
 mod video;
 #[cfg(windows)]
@@ -229,6 +231,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let config: SharedConfig = Rc::new(RefCell::new(settings::load()));
     let saved_state: SharedState = Rc::new(RefCell::new(state::load()));
     let app = AppWindow::new()?;
+    color::wire(&app);
+    theme::wire(&app, &config);
     if capture.is_none() && config.borrow().remember_window {
         state::restore_window(&app, &saved_state.borrow());
     }

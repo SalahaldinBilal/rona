@@ -1,5 +1,5 @@
 import { Theme } from "../theme.slint";
-import { Panels } from "../state.slint";
+import { Panels, ColorText } from "../state.slint";
 import { Icon } from "icon.slint";
 import { Clickable } from "clickable.slint";
 
@@ -404,6 +404,191 @@ export component ColorChoice inherits Rectangle {
                     }
                 }
             }
+        }
+    }
+}
+
+component PickerKnob inherits Rectangle {
+    width: 12px;
+    height: 12px;
+    border-radius: 6px;
+    border-width: 2px;
+    border-color: white;
+    drop-shadow-blur: 3px;
+    drop-shadow-color: #00000099;
+}
+
+// A swatch that opens a picker, and a field that takes typed or pasted colors in any format src/color.rs reads.
+export component ColorField inherits HorizontalLayout {
+    in-out property <color> value;
+    in property <bool> enabled: true;
+    callback edited();
+
+    property <float> hue;
+    property <float> saturation;
+    property <float> brightness;
+    property <float> alpha: 1;
+    property <string> field-text: ColorText.format(root.value);
+    changed value => { root.field-text = ColorText.format(root.value); }
+
+    function load-hsv() {
+        let hsv = root.value.to-hsv();
+        // A gray has no hue of its own, so the picker keeps the last one.
+        if (hsv.saturation > 0 && hsv.value > 0) {
+            root.hue = hsv.hue;
+        }
+        root.saturation = hsv.saturation;
+        root.brightness = hsv.value;
+        root.alpha = hsv.alpha;
+    }
+
+    function pick() {
+        root.value = hsv(root.hue, root.saturation, root.brightness, root.alpha);
+        root.edited();
+    }
+
+    function fraction(position: length, size: length) -> float {
+        return max(0, min(1, position / size));
+    }
+
+    spacing: 10px;
+
+    VerticalLayout {
+        alignment: center;
+
+        Rectangle {
+            width: 22px;
+            height: 22px;
+            border-radius: 5px;
+            border-width: 1px;
+            border-color: swatch-area.has-hover && root.enabled ? Theme.muted : Theme.line-hover;
+            animate border-color { duration: Theme.hover-duration; }
+            background: root.value;
+
+            swatch-area := Clickable {
+                enabled: root.enabled;
+                clicked => {
+                    root.load-hsv();
+                    popup.show();
+                }
+            }
+
+            popup := PopupWindow {
+                x: 0;
+                y: parent.height + 4px;
+                width: 220px;
+                height: 210px;
+                close-policy: close-on-click-outside;
+
+                Rectangle {
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Theme.line;
+                    background: Theme.panel;
+                    drop-shadow-blur: 16px;
+                    drop-shadow-color: #00000080;
+
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 10px;
+
+                        Rectangle {
+                            height: 140px;
+                            border-radius: 4px;
+                            background: @linear-gradient(90deg, #ffffff 0%, hsv(root.hue, 1, 1) 100%);
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: @linear-gradient(180deg, #00000000 0%, #000000 100%);
+                            }
+
+                            PickerKnob {
+                                x: root.saturation * parent.width - self.width / 2;
+                                y: (1 - root.brightness) * parent.height - self.height / 2;
+                            }
+
+                            Clickable {
+                                function set-from(x: length, y: length) {
+                                    root.saturation = root.fraction(x, self.width);
+                                    root.brightness = 1 - root.fraction(y, self.height);
+                                    root.pick();
+                                }
+                                pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                        self.set-from(self.mouse-x, self.mouse-y);
+                                    }
+                                }
+                                moved => { self.set-from(self.mouse-x, self.mouse-y); }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 12px;
+                            border-radius: 6px;
+                            background: @linear-gradient(90deg, #ff0000 0%, #ffff00 16.67%, #00ff00 33.33%, #00ffff 50%,
+                                #0000ff 66.67%, #ff00ff 83.33%, #ff0000 100%);
+
+                            PickerKnob {
+                                x: root.hue / 360 * (parent.width - self.width);
+                            }
+
+                            Clickable {
+                                function set-from(x: length) {
+                                    root.hue = root.fraction(x, self.width) * 359.9;
+                                    root.pick();
+                                }
+                                pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                        self.set-from(self.mouse-x);
+                                    }
+                                }
+                                moved => { self.set-from(self.mouse-x); }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 12px;
+                            border-radius: 6px;
+                            background: #ffffff26;
+
+                            Rectangle {
+                                border-radius: 6px;
+                                background: @linear-gradient(90deg,
+                                    hsv(root.hue, root.saturation, root.brightness, 0) 0%,
+                                    hsv(root.hue, root.saturation, root.brightness, 1) 100%);
+                            }
+
+                            PickerKnob {
+                                x: root.alpha * (parent.width - self.width);
+                            }
+
+                            Clickable {
+                                function set-from(x: length) {
+                                    root.alpha = root.fraction(x, self.width);
+                                    root.pick();
+                                }
+                                pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                        self.set-from(self.mouse-x);
+                                    }
+                                }
+                                moved => { self.set-from(self.mouse-x); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    TextField {
+        horizontal-stretch: 1;
+        text <=> root.field-text;
+        enabled: root.enabled;
+        valid: ColorText.parse(self.draft).valid;
+        edited => {
+            root.value = ColorText.parse(self.text).color;
+            root.edited();
         }
     }
 }

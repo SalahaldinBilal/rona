@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -82,6 +82,9 @@ pub struct Config {
     pub hide_controls_after: f64,
     pub osd_duration: f64,
 
+    // Empty for the default theme.
+    pub theme: String,
+
     pub shortcuts: Vec<String>,
 
     pub check_updates: bool,
@@ -133,6 +136,8 @@ impl Default for Config {
             double_click: 0,
             hide_controls_after: 2.5,
             osd_duration: 1.2,
+
+            theme: String::new(),
 
             shortcuts: Action::ALL.iter().map(|action| action.default_key()).collect(),
 
@@ -225,8 +230,9 @@ impl Config {
                 self.hide_controls_after = defaults.hide_controls_after;
                 self.osd_duration = defaults.osd_duration;
             }
-            6 => self.shortcuts = defaults.shortcuts,
-            7 => self.check_updates = defaults.check_updates,
+            // 6 is the theme page, which reverts its profile in theme.rs instead.
+            7 => self.shortcuts = defaults.shortcuts,
+            8 => self.check_updates = defaults.check_updates,
             _ => {}
         }
     }
@@ -304,6 +310,7 @@ impl Config {
             ("double-click", DOUBLE_CLICK_CHOICES[self.double_click].into()),
             ("hide-controls-after", self.hide_controls_after.to_string()),
             ("osd-duration", self.osd_duration.to_string()),
+            ("theme", self.theme.clone()),
             ("check-updates", yes_no(self.check_updates)),
         ]
         .into_iter()
@@ -362,6 +369,7 @@ impl Config {
             "double-click" => set_choice(&mut self.double_click, value, &DOUBLE_CLICK_CHOICES),
             "hide-controls-after" => set_number(&mut self.hide_controls_after, value, is_positive),
             "osd-duration" => set_number(&mut self.osd_duration, value, is_positive),
+            "theme" => self.theme = value.into(),
             "check-updates" => set_flag(&mut self.check_updates, value),
             _ => {
                 let Some(action) = name.strip_prefix("shortcut.") else { return };
@@ -467,7 +475,7 @@ pub fn save(config: &Config) {
     write_file(FILE_NAME, &config.entries());
 }
 
-pub fn read_file(file_name: &str, mut set: impl FnMut(&str, &str)) {
+pub fn read_file(file_name: impl AsRef<Path>, mut set: impl FnMut(&str, &str)) {
     let Some(path) = config_dir().map(|dir| dir.join(file_name)) else { return };
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
@@ -484,11 +492,12 @@ pub fn read_file(file_name: &str, mut set: impl FnMut(&str, &str)) {
     }
 }
 
-pub fn write_file(file_name: &str, entries: &[(String, String)]) {
+pub fn write_file(file_name: impl AsRef<Path>, entries: &[(String, String)]) {
     let Some(dir) = config_dir() else { return };
     let text: String = entries.iter().map(|(name, value)| format!("{name} = {value}\n")).collect();
     let path = dir.join(file_name);
-    let result = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, text));
+    let folder = path.parent().unwrap_or(&dir);
+    let result = std::fs::create_dir_all(folder).and_then(|()| std::fs::write(&path, text));
     if let Err(err) = result {
         eprintln!("could not write {}: {err}", path.display());
     }
