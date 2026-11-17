@@ -101,5 +101,55 @@
         };
         config = lib.mkIf cfg.enable {environment.systemPackages = [cfg.package];};
       };
+
+      homeManagerModules.default = {
+        config,
+        lib,
+        pkgs,
+        ...
+      }: let
+        cfg = config.programs.rona;
+        valueString = value:
+          if lib.isBool value
+          then lib.boolToYesNo value
+          else lib.generators.mkValueStringDefault {} value;
+      in {
+        options.programs.rona = {
+          enable = lib.mkEnableOption "Rona";
+          package = lib.mkOption {
+            type = lib.types.package;
+            default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+            description = "The Rona package to install.";
+          };
+          settings = lib.mkOption {
+            type = with lib.types; attrsOf (oneOf [bool int float str]);
+            default = {};
+            example = lib.literalExpression ''
+              {
+                resume-audio = true;
+                seek-short = 10;
+                speeds = "1, 1.5, 2";
+                subtitle-color = "#ffff00";
+                "shortcut.mute" = "M";
+              }
+            '';
+            description = ''
+              Settings written to {file}`$XDG_CONFIG_HOME/rona/settings.conf`,
+              named as Rona writes them there itself. Settings left out keep
+              their defaults. The file is read-only, so a change made in
+              Rona's settings dialog only lasts until it closes.
+            '';
+          };
+        };
+        config = lib.mkIf cfg.enable {
+          home.packages = [cfg.package];
+          xdg.configFile."rona/settings.conf" = lib.mkIf (cfg.settings != {}) {
+            text = lib.generators.toKeyValue {
+              mkKeyValue = lib.generators.mkKeyValueDefault {mkValueString = valueString;} " = ";
+            }
+            cfg.settings;
+          };
+        };
+      };
     };
 }
