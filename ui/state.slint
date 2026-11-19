@@ -330,6 +330,7 @@ export global WindowControls {
     in-out property <bool> pointer-active: true;
 
     callback activity();
+    callback pointer-hidden-changed(bool);
     callback start-drag();
     callback start-resize(ResizeEdge);
     callback minimize();

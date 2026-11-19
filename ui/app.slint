@@ -142,12 +142,16 @@ export component AppWindow inherits Window {
         }
     }
 
-    TouchArea {
+    property <bool> video-playing: Player.phase == Phase.playing && !Player.paused && !Player.audio-only;
+    property <bool> pointer-hidden: !WindowControls.pointer-active && video-area.has-hover
+        && (WindowControls.fullscreen || root.video-playing);
+    changed pointer-hidden => { WindowControls.pointer-hidden-changed(root.pointer-hidden); }
+
+    video-area := TouchArea {
         x: 0;
         y: root.video-y;
         width: root.video-width;
         height: root.video-height;
-        mouse-cursor: WindowControls.pointer-active ? MouseCursor.default : MouseCursor.none;
         changed mouse-x => { WindowControls.activity(); }
         changed mouse-y => { WindowControls.activity(); }
         clicked => {

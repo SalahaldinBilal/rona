@@ -1163,7 +1163,7 @@ fn attach_video(
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(app) = shadow_weak.upgrade() {
                     enable_window_shadow(&app);
-                    fill_monitor_when_fullscreen(&app);
+                    subclass_window(&app);
                     set_window_icons(&app);
                 }
             });
@@ -1489,20 +1489,20 @@ fn wire_window_controls(app: &AppWindow, osd: &Osd, config: &SharedConfig, saved
         let Some(app) = app_weak.upgrade() else { return };
         let controls = app.global::<WindowControls>();
         controls.set_pointer_active(true);
-        if !controls.get_fullscreen() {
-            pointer_timer.stop();
-            return;
-        }
         let hide_weak = app_weak.clone();
         let delay = pointer_config.borrow().pointer_hide_delay();
         pointer_timer.start(TimerMode::SingleShot, delay, move || {
             if let Some(app) = hide_weak.upgrade() {
-                let controls = app.global::<WindowControls>();
-                if controls.get_fullscreen() {
-                    controls.set_pointer_active(false);
-                }
+                app.global::<WindowControls>().set_pointer_active(false);
             }
         });
+    });
+
+    let app_weak = app.as_weak();
+    controls.on_pointer_hidden_changed(move |hidden| {
+        if let Some(app) = app_weak.upgrade() {
+            set_pointer_hidden(&app, hidden);
+        }
     });
 
     let app_weak = app.as_weak();
@@ -1604,28 +1604,56 @@ fn enable_window_shadow(app: &AppWindow) {
 #[cfg(not(target_os = "windows"))]
 fn enable_window_shadow(_app: &AppWindow) {}
 
-// winit clamps a maximized frameless window to the work area even in fullscreen (winit#4756).
 #[cfg(target_os = "windows")]
-fn fill_monitor_when_fullscreen(app: &AppWindow) {
+fn window_hwnd(app: &AppWindow) -> Option<windows::Win32::Foundation::HWND> {
     use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::Shell::SetWindowSubclass;
 
     app.window().with_winit_window(|window| {
-        let Ok(handle) = window.window_handle() else { return };
-        let RawWindowHandle::Win32(handle) = handle.as_raw() else { return };
-        let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
-        if !unsafe { SetWindowSubclass(hwnd, Some(fullscreen_client_area), 1, 0) }.as_bool() {
-            eprintln!("could not hook the window for fullscreen sizing");
-        }
-    });
+        let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else { return None };
+        Some(windows::Win32::Foundation::HWND(handle.hwnd.get() as *mut std::ffi::c_void))
+    })?
+}
+
+#[cfg(target_os = "windows")]
+static POINTER_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+// winit hides the cursor with ShowCursor, which does nothing while another window has focus.
+#[cfg(target_os = "windows")]
+fn set_pointer_hidden(app: &AppWindow, hidden: bool) {
+    use windows::Win32::Foundation::{LPARAM, POINT, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, HTCLIENT, SendMessageW, WM_MOUSEMOVE, WM_SETCURSOR, WindowFromPoint};
+
+    POINTER_HIDDEN.store(hidden, Ordering::Relaxed);
+    let Some(hwnd) = window_hwnd(app) else { return };
+    let mut point = POINT::default();
+    if unsafe { GetCursorPos(&mut point) }.is_err() || unsafe { WindowFromPoint(point) } != hwnd {
+        return;
+    }
+    // Windows only sends WM_SETCURSOR when the mouse moves, and the timer hides it while it sits still.
+    let lparam = LPARAM(((WM_MOUSEMOVE << 16) | HTCLIENT) as isize);
+    unsafe { SendMessageW(hwnd, WM_SETCURSOR, Some(WPARAM(hwnd.0 as usize)), Some(lparam)) };
 }
 
 #[cfg(not(target_os = "windows"))]
-fn fill_monitor_when_fullscreen(_app: &AppWindow) {}
+fn set_pointer_hidden(app: &AppWindow, hidden: bool) {
+    app.window().with_winit_window(|window| window.set_cursor_visible(!hidden));
+}
 
 #[cfg(target_os = "windows")]
-unsafe extern "system" fn fullscreen_client_area(
+fn subclass_window(app: &AppWindow) {
+    use windows::Win32::UI::Shell::SetWindowSubclass;
+
+    let Some(hwnd) = window_hwnd(app) else { return };
+    if !unsafe { SetWindowSubclass(hwnd, Some(window_messages), 1, 0) }.as_bool() {
+        eprintln!("could not hook the window for fullscreen sizing and cursor hiding");
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn subclass_window(_app: &AppWindow) {}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn window_messages(
     hwnd: windows::Win32::Foundation::HWND,
     message: u32,
     wparam: windows::Win32::Foundation::WPARAM,
@@ -1636,8 +1664,15 @@ unsafe extern "system" fn fullscreen_client_area(
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect};
     use windows::Win32::UI::Shell::DefSubclassProc;
-    use windows::Win32::UI::WindowsAndMessaging::{GWL_STYLE, GetWindowLongW, NCCALCSIZE_PARAMS, WM_NCCALCSIZE, WS_CAPTION};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GWL_STYLE, GetWindowLongW, HTCLIENT, NCCALCSIZE_PARAMS, SetCursor, WM_NCCALCSIZE, WM_SETCURSOR, WS_CAPTION,
+    };
 
+    if message == WM_SETCURSOR && (lparam.0 & 0xffff) as u32 == HTCLIENT && POINTER_HIDDEN.load(Ordering::Relaxed) {
+        unsafe { SetCursor(None) };
+        return LRESULT(1);
+    }
+    // winit clamps a maximized frameless window to the work area even in fullscreen (winit#4756).
     // winit removes WS_CAPTION only while fullscreen.
     let fullscreen = || unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32 & WS_CAPTION.0 == 0;
     if message == WM_NCCALCSIZE && wparam.0 != 0 && fullscreen() {
