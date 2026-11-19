@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-20
+
+### Changed
+- The mouse cursor now also hides over a playing video in a normal window, not only in fullscreen.
+
+### Fixed
+- The mouse cursor over the video hides reliably once the mouse stops moving, also while another window has focus. Before, it often stayed visible until the mouse moved again.
+
 ## [0.1.2] - 2026-11-17
 
 ### Added
