@@ -22,7 +22,7 @@ jobs:
         run: |
           version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
           if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME doesn't match version $version in Cargo.toml. Run node scripts/tasks.mts bump first."
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match version $version in Cargo.toml. Run npm run version:bump first."
             exit 1
           fi
 

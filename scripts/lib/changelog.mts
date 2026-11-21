@@ -25,7 +25,7 @@ export function releaseNotes(changelog: string, version: string): string {
     const start = changelog.indexOf(heading);
     if (start < 0) {
         throw new TaskError(
-            `no "${heading}" section in CHANGELOG.md, run \`node scripts/tasks.mts bump ${version}\` before tagging`,
+            `no "${heading}" section in CHANGELOG.md, run \`npm run version:bump ${version}\` before tagging`,
         );
     }
     const lineEnd = changelog.indexOf("\n", start);

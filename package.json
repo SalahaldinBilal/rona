@@ -6,6 +6,7 @@
   },
   "scripts": {
     "task": "node scripts/tasks.mts",
+    "version:bump": "node scripts/tasks.mts bump",
     "test": "node --test \"scripts/test/*.test.mts\"",
     "typecheck": "tsc"
   },

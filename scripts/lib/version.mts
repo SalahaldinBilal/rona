@@ -7,7 +7,7 @@ const PACKAGE_VERSION = /^version = "([^"]*)"$/m;
 
 export function bump(version: string): void {
     if (!isVersion(version)) {
-        throw new TaskError("Usage: node scripts/tasks.mts bump <version>  (for example 0.2.0)");
+        throw new TaskError("Usage: npm run version:bump <version>  (for example 0.2.0)");
     }
     const cargoPath = path.join(root, "Cargo.toml");
     const updated = setPackageVersion(read(cargoPath), version);
