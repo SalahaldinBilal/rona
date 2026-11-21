@@ -100,6 +100,8 @@ export global Panels {
     in-out property <int> focus-requests;
     // The focused text field is under the pointer, so a press there keeps focus instead of leaving and coming back.
     in-out property <bool> pointer-on-focused-field;
+
+    callback recorder-window-changed(bool);
 }
 
 export global Recorder {
@@ -197,6 +199,8 @@ export global Settings {
     in-out property <bool> on-top-while-playing;
     in-out property <bool> remember-window;
     in-out property <int> double-click;
+    // 0 opens the recorder in its own window, 1 as a sidebar.
+    in-out property <int> recorder-placement;
     in-out property <string> hide-controls-after;
     in-out property <string> osd-duration;
 

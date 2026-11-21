@@ -34,6 +34,7 @@ const RENDERER_HINT: &str = "Auto uses OpenGL.";
 const ASPECT_RATIOS: [&str; 5] = ["-1", "16:9", "4:3", "21:9", "2.35:1"];
 const VOLUME_LIMITS: [&str; 3] = ["100", "150", "200"];
 const DOUBLE_CLICK_CHOICES: [&str; 2] = ["fullscreen", "nothing"];
+const RECORDER_PLACEMENTS: [&str; 2] = ["window", "sidebar"];
 const SUBTITLE_SIZES: (u32, u32) = (16, 80);
 const MAX_SUBTITLE_RAISE: u32 = 50;
 
@@ -80,6 +81,7 @@ pub struct Config {
     pub on_top_while_playing: bool,
     pub remember_window: bool,
     pub double_click: usize,
+    pub recorder_placement: usize,
     pub hide_controls_after: f64,
     pub osd_duration: f64,
 
@@ -135,6 +137,7 @@ impl Default for Config {
             on_top_while_playing: false,
             remember_window: true,
             double_click: 0,
+            recorder_placement: 0,
             hide_controls_after: 2.5,
             osd_duration: 1.2,
 
@@ -228,6 +231,7 @@ impl Config {
                 self.on_top_while_playing = defaults.on_top_while_playing;
                 self.remember_window = defaults.remember_window;
                 self.double_click = defaults.double_click;
+                self.recorder_placement = defaults.recorder_placement;
                 self.hide_controls_after = defaults.hide_controls_after;
                 self.osd_duration = defaults.osd_duration;
             }
@@ -309,6 +313,7 @@ impl Config {
             ("on-top-while-playing", yes_no(self.on_top_while_playing)),
             ("remember-window", yes_no(self.remember_window)),
             ("double-click", DOUBLE_CLICK_CHOICES[self.double_click].into()),
+            ("recorder", RECORDER_PLACEMENTS[self.recorder_placement].into()),
             ("hide-controls-after", self.hide_controls_after.to_string()),
             ("osd-duration", self.osd_duration.to_string()),
             ("theme", self.theme.clone()),
@@ -368,6 +373,7 @@ impl Config {
             "on-top-while-playing" => set_flag(&mut self.on_top_while_playing, value),
             "remember-window" => set_flag(&mut self.remember_window, value),
             "double-click" => set_choice(&mut self.double_click, value, &DOUBLE_CLICK_CHOICES),
+            "recorder" => set_choice(&mut self.recorder_placement, value, &RECORDER_PLACEMENTS),
             "hide-controls-after" => set_number(&mut self.hide_controls_after, value, is_positive),
             "osd-duration" => set_number(&mut self.osd_duration, value, is_positive),
             "theme" => self.theme = value.into(),
@@ -621,6 +627,7 @@ fn write_ui(ui: &SettingsUi, config: &Config, devices: &[AudioDevice]) {
     ui.set_on_top_while_playing(config.on_top_while_playing);
     ui.set_remember_window(config.remember_window);
     ui.set_double_click(config.double_click as i32);
+    ui.set_recorder_placement(config.recorder_placement as i32);
     ui.set_hide_controls_after(config.hide_controls_after.to_string().into());
     ui.set_osd_duration(config.osd_duration.to_string().into());
 
@@ -679,6 +686,7 @@ fn read_ui(ui: &SettingsUi, config: &mut Config, devices: &[AudioDevice]) {
     config.on_top_while_playing = ui.get_on_top_while_playing();
     config.remember_window = ui.get_remember_window();
     config.double_click = index(ui.get_double_click(), DOUBLE_CLICK_CHOICES.len());
+    config.recorder_placement = index(ui.get_recorder_placement(), RECORDER_PLACEMENTS.len());
     set_number(&mut config.hide_controls_after, &ui.get_hide_controls_after(), is_positive);
     set_number(&mut config.osd_duration, &ui.get_osd_duration(), is_positive);
 

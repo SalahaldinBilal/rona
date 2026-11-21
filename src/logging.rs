@@ -45,13 +45,14 @@ macro_rules! debug {
 macro_rules! info {
     ($($arg:tt)*) => { $crate::logging::write($crate::logging::Level::Info, module_path!(), format_args!($($arg)*)) };
 }
-macro_rules! warn {
+// Named apart, since a bare `warn` in a `use` clashes with the built-in #[warn] attribute.
+macro_rules! log_warn {
     ($($arg:tt)*) => { $crate::logging::write($crate::logging::Level::Warn, module_path!(), format_args!($($arg)*)) };
 }
 macro_rules! error {
     ($($arg:tt)*) => { $crate::logging::write($crate::logging::Level::Error, module_path!(), format_args!($($arg)*)) };
 }
-pub(crate) use {debug, error, info, warn};
+pub(crate) use {debug, error, info, log_warn as warn};
 
 /// Starts writing to a file per day in the log folder, and removes files older than a week.
 /// Before this runs, or if the folder can't be used, lines only go to stderr.

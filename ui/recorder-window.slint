@@ -1,0 +1,54 @@
+import { Theme } from "theme.slint";
+import { Panels, WindowControls } from "state.slint";
+import { RecorderPanel } from "recorder-panel.slint";
+
+// The recorder in a window of its own. Slint gives each window its own globals, so Rust copies the
+// recorder's fields over when it opens and closes, and mirrors the theme.
+// Its size follows the form, so it grows and shrinks as fields show and hide.
+export component RecorderWindow inherits Window {
+    title: "Recorder";
+    no-frame: true;
+    min-width: 320px;
+    max-width: 320px;
+    min-height: panel.needed-height;
+    max-height: panel.needed-height;
+    background: Theme.chrome;
+    forward-focus: keys;
+
+    callback dismiss();
+    callback key-pressed(string, bool) -> bool;
+
+    property <int> focus-requests: Panels.focus-requests;
+    changed focus-requests => { keys.focus(); }
+
+    // Rust calls this on every mouse press, as in the main window, so a click takes focus from a text field.
+    public function release-text-focus() {
+        if (!keys.has-focus && !Panels.pointer-on-focused-field) {
+            keys.focus();
+        }
+    }
+
+    keys := FocusScope {
+        focus-changed-event => {
+            if (self.has-focus) {
+                Panels.pointer-on-focused-field = false;
+            }
+        }
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.dismiss();
+                return accept;
+            }
+            if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
+                return reject;
+            }
+            return root.key-pressed(event.text, event.modifiers.shift) ? accept : reject;
+        }
+    }
+
+    panel := RecorderPanel {
+        windowed: true;
+        dismiss => { root.dismiss(); }
+        drag-window => { WindowControls.start-drag(); }
+    }
+}

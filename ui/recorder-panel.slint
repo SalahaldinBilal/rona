@@ -32,7 +32,14 @@ component InfoText inherits Text {
 }
 
 export component RecorderPanel inherits Rectangle {
+    // In its own window the header moves the window, and the window draws its own edge.
+    in property <bool> windowed;
+    // The header plus the whole form, so the window can fit it without scrolling.
+    out property <length> needed-height: 36px + content.preferred-height;
     property <bool> locked: Recorder.recording || Recorder.encoding;
+
+    callback dismiss();
+    callback drag-window();
 
     background: Theme.chrome;
 
@@ -40,17 +47,22 @@ export component RecorderPanel inherits Rectangle {
         clicked => { Panels.focus-requests += 1; }
     }
 
-    Rectangle {
+    if !root.windowed: Rectangle {
         x: 0;
         width: 1px;
         background: Theme.line;
     }
 
     VerticalLayout {
-        padding-left: 1px;
+        padding-left: root.windowed ? 0px : 1px;
 
         Rectangle {
             height: 36px;
+
+            if root.windowed: TouchArea {
+                moved => { root.drag-window(); }
+                clicked => { Panels.focus-requests += 1; }
+            }
 
             HorizontalLayout {
                 padding-left: 12px;
@@ -77,7 +89,7 @@ export component RecorderPanel inherits Rectangle {
                 }
 
                 IconButton {
-                    clicked => { Panels.recorder-open = false; }
+                    clicked => { root.dismiss(); }
 
                     Icon {
                         stroke-commands: "M 5 5 L 13 13 M 13 5 L 5 13";

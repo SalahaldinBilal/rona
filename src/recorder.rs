@@ -6,10 +6,11 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use slint::{ComponentHandle, Model, Timer, TimerMode};
+use slint::{ComponentHandle, Model, SharedString, Timer, TimerMode};
 
 use crate::logging::{debug, info, warn};
 use crate::mpv::{Event, Mpv, PropertyValue};
+use crate::recorder_window;
 use crate::{AppWindow, EventState, Player, Recorder as RecorderUi, format_time, http_cache, log_error};
 
 pub const DUMP_COMMAND_ID: u64 = 1;
@@ -71,10 +72,33 @@ pub struct Controller {
     poll: Timer,
 }
 
+// The recorder shows in the main window's sidebar or in its own window, and each has its own Recorder global.
+// Status goes to both, fields are read from the one showing.
+fn show(app: &AppWindow, set: impl Fn(&RecorderUi)) {
+    set(&app.global::<RecorderUi>());
+    recorder_window::with_ui(&set);
+}
+
+fn show_status(app: &AppWindow, text: impl Into<SharedString>) {
+    let text = text.into();
+    show(app, |ui| ui.set_status_text(text.clone()));
+}
+
+fn show_text(app: &AppWindow, text: impl Into<SharedString>, set: impl Fn(&RecorderUi, SharedString)) {
+    let text = text.into();
+    show(app, |ui| set(ui, text.clone()));
+}
+
+fn set_callbacks(ui: &RecorderUi, toggle: &Rc<dyn Fn()>, open: &Rc<dyn Fn()>, browse: &Rc<dyn Fn()>) {
+    let (toggle, open, browse) = (toggle.clone(), open.clone(), browse.clone());
+    ui.on_toggle_recording(move || toggle());
+    ui.on_open_folder(move || open());
+    ui.on_browse_folder(move || browse());
+}
+
 pub fn wire(app: &AppWindow, mpv: &Mpv, state: Arc<EventState>) -> Rc<RefCell<Controller>> {
-    let ui = app.global::<RecorderUi>();
-    if ui.get_folder().is_empty() {
-        ui.set_folder(default_folder().to_string_lossy().as_ref().into());
+    if app.global::<RecorderUi>().get_folder().is_empty() {
+        show_text(app, default_folder().to_string_lossy().as_ref(), |ui, text| ui.set_folder(text));
     }
 
     let controller = Rc::new(RefCell::new(Controller {
@@ -88,30 +112,30 @@ pub fn wire(app: &AppWindow, mpv: &Mpv, state: Arc<EventState>) -> Rc<RefCell<Co
     }));
 
     let weak = Rc::downgrade(&controller);
-    ui.on_toggle_recording(move || with_controller(&weak, Controller::toggle));
-
+    let toggle: Rc<dyn Fn()> = Rc::new(move || with_controller(&weak, Controller::toggle));
     let app_weak = app.as_weak();
-    ui.on_open_folder(move || {
+    let open: Rc<dyn Fn()> = Rc::new(move || {
         if let Some(app) = app_weak.upgrade() {
-            open_folder(Path::new(app.global::<RecorderUi>().get_folder().as_str()));
+            open_folder(Path::new(recorder_window::read(&app, |ui| ui.get_folder()).as_str()));
         }
     });
-
     let app_weak = app.as_weak();
-    ui.on_browse_folder(move || {
+    let browse: Rc<dyn Fn()> = Rc::new(move || {
         let Some(app) = app_weak.upgrade() else { return };
-        let current = PathBuf::from(app.global::<RecorderUi>().get_folder().as_str());
+        let current = PathBuf::from(recorder_window::read(&app, |ui| ui.get_folder()).as_str());
         let app_weak = app_weak.clone();
         // The native dialog blocks its thread, which must not be the UI thread that draws the video.
         std::thread::spawn(move || {
             let Some(folder) = rfd::FileDialog::new().set_directory(&current).pick_folder() else { return };
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(app) = app_weak.upgrade() {
-                    app.global::<RecorderUi>().set_folder(folder.to_string_lossy().as_ref().into());
+                    show_text(&app, folder.to_string_lossy().as_ref(), |ui, text| ui.set_folder(text));
                 }
             });
         });
     });
+    set_callbacks(&app.global::<RecorderUi>(), &toggle, &open, &browse);
+    recorder_window::with_ui(|ui| set_callbacks(ui, &toggle, &open, &browse));
 
     let weak = Rc::downgrade(&controller);
     controller
@@ -138,28 +162,28 @@ impl Controller {
 
     fn start(&mut self) {
         let Some(app) = self.app.upgrade() else { return };
-        let ui = app.global::<RecorderUi>();
+        let fields = recorder_window::read(&app, Fields::read);
         let player = app.global::<Player>();
 
         let source = self.state.path.lock().map(|path| path.clone()).unwrap_or_default();
         if source.is_empty() {
-            ui.set_status_text("Nothing is playing.".into());
+            show_status(&app, "Nothing is playing.");
             return;
         }
-        let folder = PathBuf::from(ui.get_folder().as_str());
+        let folder = PathBuf::from(fields.folder.as_str());
         if let Err(err) = std::fs::create_dir_all(&folder) {
-            ui.set_status_text(format!("Could not create the folder: {err}").into());
+            show_status(&app, format!("Could not create the folder: {err}"));
             return;
         }
-        let base = folder.join(base_name(ui.get_prefix().as_str(), player.get_media_title().as_str()));
+        let base = folder.join(base_name(fields.prefix.as_str(), player.get_media_title().as_str()));
 
-        let output = if ui.get_mode() == 0 {
+        let output = if fields.mode == 0 {
             let format = self.state.file_format.lock().map(|format| format.clone()).unwrap_or_default();
             let extension = copy_extension(&format).to_string();
-            let split = match ui.get_split_mode() {
-                1 => Split::Seconds(parse_positive(ui.get_split_minutes().as_str()).unwrap_or(60) as f32 * 60.0),
+            let split = match fields.split_mode {
+                1 => Split::Seconds(parse_positive(fields.split_minutes.as_str()).unwrap_or(60) as f32 * 60.0),
                 2 => {
-                    let megabytes = parse_positive(ui.get_split_megabytes().as_str()).unwrap_or(500);
+                    let megabytes = parse_positive(fields.split_megabytes.as_str()).unwrap_or(500);
                     match average_bytes_per_second(&source, player.get_duration()) {
                         Some(rate) => Split::Seconds((megabytes * MEGABYTE) as f32 / rate),
                         None => Split::Off,
@@ -168,12 +192,12 @@ impl Controller {
                 _ => Split::Off,
             };
             log_error(self.mpv.command(&["set", "demuxer-max-back-bytes", RECORDING_BACK_BUFFER]));
-            ui.set_current_file(file_name(&part_path(&base, &extension, 1, &split)).into());
+            show_text(&app, file_name(&part_path(&base, &extension, 1, &split)), |ui, text| ui.set_current_file(text));
             Output::Copy { base, extension, split }
         } else {
-            let settings = encode_settings(&ui);
+            let settings = fields.encode;
             let path = with_extension(&base, settings.extension);
-            ui.set_current_file(file_name(&path).into());
+            show_text(&app, file_name(&path), |ui, text| ui.set_current_file(text));
             Output::Encode {
                 source,
                 subtitle: selected_track(&player.get_subtitle_tracks()),
@@ -192,22 +216,21 @@ impl Controller {
             }
         );
         self.session = Some(Session { start: player.get_position(), output });
-        ui.set_recording(true);
-        ui.set_elapsed_text("0:00".into());
-        ui.set_size_text("".into());
-        ui.set_status_text("Recording.".into());
+        show(&app, |ui| ui.set_recording(true));
+        show_text(&app, "0:00", |ui, text| ui.set_elapsed_text(text));
+        show_text(&app, "", |ui, text| ui.set_size_text(text));
+        show_status(&app, "Recording.");
     }
 
     fn stop(&mut self) {
         let Some(app) = self.app.upgrade() else { return };
-        let ui = app.global::<RecorderUi>();
-        ui.set_recording(false);
+        show(&app, |ui| ui.set_recording(false));
         let Some(Session { start, output, .. }) = self.session.take() else { return };
         let end = app.global::<Player>().get_position();
         info!("recording stopped at {end:.1} s, {:.1} s long", end - start);
 
         if end - start < 0.5 {
-            ui.set_status_text("The recorded part is too short.".into());
+            show_status(&app, "The recorded part is too short.");
             if matches!(output, Output::Copy { .. }) {
                 log_error(self.mpv.command(&["set", "demuxer-max-back-bytes", DEFAULT_BACK_BUFFER]));
             }
@@ -223,7 +246,7 @@ impl Controller {
                     .collect::<VecDeque<_>>();
                 let total = parts.len();
                 self.dump = Some(Dump { pending: parts, current: None, total, written: Vec::new(), failed: None });
-                ui.set_encoding(true);
+                show(&app, |ui| ui.set_encoding(true));
                 self.dump_next();
             }
             Output::Encode { source, mut settings, subtitle, audio, path } => {
@@ -235,12 +258,12 @@ impl Controller {
                     Ok(job) => {
                         info!("encoding to {}", job.output.display());
                         self.job = Some(job);
-                        ui.set_encoding(true);
-                        ui.set_status_text("Encoding 0%".into());
+                        show(&app, |ui| ui.set_encoding(true));
+                        show_status(&app, "Encoding 0%");
                     }
                     Err(err) => {
                         warn!("could not start encoding: {err}");
-                        ui.set_status_text(format!("Could not start encoding: {err}").into());
+                        show_status(&app, format!("Could not start encoding: {err}"));
                     }
                 }
             }
@@ -250,14 +273,13 @@ impl Controller {
     // dump-cache commands run one at a time, a new one would cancel the one still writing.
     fn dump_next(&mut self) {
         let Some(app) = self.app.upgrade() else { return };
-        let ui = app.global::<RecorderUi>();
         let Some(dump) = &mut self.dump else { return };
 
         if let Some((from, to, path)) = dump.pending.pop_front() {
             let part = dump.total - dump.pending.len();
             let status = if dump.total > 1 { format!("Saving part {part} of {}.", dump.total) } else { "Saving.".into() };
-            ui.set_status_text(status.into());
-            ui.set_current_file(file_name(&path).into());
+            show_status(&app, status);
+            show_text(&app, file_name(&path), |ui, text| ui.set_current_file(text));
             let (from_text, to_text) = (format!("{from:.3}"), format!("{to:.3}"));
             let path_text = path.to_string_lossy().into_owned();
             info!("saving part {part} of {}, {from_text} to {to_text} s, to {path_text}", dump.total);
@@ -276,20 +298,19 @@ impl Controller {
             Some(err) => warn!("saving the recording failed: {err}"),
             None => info!("recording saved, {} files, {}", dump.written.len(), bytes_text(size)),
         }
-        ui.set_status_text(status.into());
-        ui.set_size_text(bytes_text(size).into());
-        ui.set_encoding(false);
+        show_status(&app, status);
+        show_text(&app, bytes_text(size), |ui, text| ui.set_size_text(text));
+        show(&app, |ui| ui.set_encoding(false));
         self.dump = None;
         log_error(self.mpv.command(&["set", "demuxer-max-back-bytes", DEFAULT_BACK_BUFFER]));
     }
 
     fn tick(&mut self) {
         let Some(app) = self.app.upgrade() else { return };
-        let ui = app.global::<RecorderUi>();
 
         if let Some(session) = &self.session {
             let span = app.global::<Player>().get_position() - session.start;
-            ui.set_elapsed_text(format_time(span.max(0.0)).into());
+            show_text(&app, format_time(span.max(0.0)), |ui, text| ui.set_elapsed_text(text));
         }
 
         let results: Vec<Option<String>> =
@@ -314,7 +335,7 @@ impl Controller {
                 }
             } else {
                 let progress = f32::from_bits(job.progress.load(Ordering::Relaxed));
-                ui.set_status_text(format!("Encoding {:.0}%", progress * 100.0).into());
+                show_status(&app, format!("Encoding {:.0}%", progress * 100.0));
             }
         }
     }
@@ -439,12 +460,53 @@ fn finish_encoder(job: EncodeJob, app: slint::Weak<AppWindow>) {
         }
         let _ = slint::invoke_from_event_loop(move || {
             let Some(app) = app.upgrade() else { return };
-            let ui = app.global::<RecorderUi>();
-            ui.set_encoding(false);
-            ui.set_size_text(bytes_text(size).into());
-            ui.set_status_text(if size > 0 { "Saved." } else { "Encoding failed." }.into());
+            show(&app, |ui| ui.set_encoding(false));
+            show_text(&app, bytes_text(size), |ui, text| ui.set_size_text(text));
+            show_status(&app, if size > 0 { "Saved." } else { "Encoding failed." });
         });
     });
+}
+
+// What the recorder's form holds when Start is pressed.
+struct Fields {
+    folder: SharedString,
+    prefix: SharedString,
+    mode: i32,
+    split_mode: i32,
+    split_minutes: SharedString,
+    split_megabytes: SharedString,
+    encode: EncodeSettings,
+}
+
+impl Fields {
+    fn read(ui: &RecorderUi) -> Self {
+        Self {
+            folder: ui.get_folder(),
+            prefix: ui.get_prefix(),
+            mode: ui.get_mode(),
+            split_mode: ui.get_split_mode(),
+            split_minutes: ui.get_split_minutes(),
+            split_megabytes: ui.get_split_megabytes(),
+            encode: encode_settings(ui),
+        }
+    }
+}
+
+/// Copies what the user can edit from one place the recorder shows to the other.
+pub fn copy_fields(from: &RecorderUi, to: &RecorderUi) {
+    to.set_folder(from.get_folder());
+    to.set_prefix(from.get_prefix());
+    to.set_mode(from.get_mode());
+    to.set_split_mode(from.get_split_mode());
+    to.set_split_minutes(from.get_split_minutes());
+    to.set_split_megabytes(from.get_split_megabytes());
+    to.set_container(from.get_container());
+    to.set_video_codec(from.get_video_codec());
+    to.set_video_bitrate(from.get_video_bitrate());
+    to.set_size(from.get_size());
+    to.set_audio_codec(from.get_audio_codec());
+    to.set_audio_bitrate(from.get_audio_bitrate());
+    to.set_burn_subtitles(from.get_burn_subtitles());
 }
 
 fn encode_settings(ui: &RecorderUi) -> EncodeSettings {

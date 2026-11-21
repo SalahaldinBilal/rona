@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- The recorder opens in a window of its own by default, which stays above the player and can be moved anywhere. "Recorder opens as" under Interface in Settings switches it back to a sidebar.
 - Rona keeps a log of what it and mpv do, one file per day, in `%LOCALAPPDATA%\rona\logs` on Windows and `~/.local/state/rona/logs` on Linux. Files older than a week are deleted.
 
 ### Fixed

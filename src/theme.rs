@@ -9,7 +9,7 @@ use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMo
 use crate::color;
 use crate::logging::{info, warn};
 use crate::settings::{self, SharedConfig};
-use crate::{AppWindow, Theme, ThemeItem, ThemeProfiles};
+use crate::{AppWindow, RecorderWindow, Theme, ThemeItem, ThemeProfiles};
 
 const FOLDER: &str = "themes";
 const EXTENSION: &str = "conf";
@@ -281,6 +281,7 @@ impl Profiles {
         let theme = app.global::<Theme>();
         for (index, key) in KEYS.iter().enumerate() {
             (key.set)(&theme, self.value(index));
+            set_in_other_windows(index, self.value(index));
         }
     }
 
@@ -289,6 +290,7 @@ impl Profiles {
         if let Some(app) = self.app.upgrade() {
             (KEYS[index].set)(&app.global::<Theme>(), self.value(index));
         }
+        set_in_other_windows(index, self.value(index));
     }
 
     fn select(&mut self, index: i32) {
@@ -389,6 +391,27 @@ impl Profiles {
         self.write_current();
         self.show_all();
     }
+}
+
+thread_local! {
+    // Each Slint window has its own Theme global, so the recorder window gets every value the main window gets.
+    static OTHER_WINDOWS: RefCell<Vec<slint::Weak<RecorderWindow>>> = const { RefCell::new(Vec::new()) };
+}
+
+pub fn mirror_to(window: &RecorderWindow, app: &AppWindow) {
+    let (from, to) = (app.global::<Theme>(), window.global::<Theme>());
+    for key in KEYS {
+        (key.set)(&to, (key.get)(&from));
+    }
+    OTHER_WINDOWS.with_borrow_mut(|windows| windows.push(window.as_weak()));
+}
+
+fn set_in_other_windows(index: usize, value: Value) {
+    OTHER_WINDOWS.with_borrow(|windows| {
+        for window in windows.iter().filter_map(slint::Weak::upgrade) {
+            (KEYS[index].set)(&window.global::<Theme>(), value);
+        }
+    });
 }
 
 /// Applies the chosen profile, so it should run before the window is shown.

@@ -17,6 +17,7 @@ import { UpdateBanner } from "update-banner.slint";
 import { ResizeFrame } from "components/resize-frame.slint";
 
 export { Theme } from "theme.slint";
+export { RecorderWindow } from "recorder-window.slint";
 export { Player, WindowControls, Panels, Recorder, Settings, Updates, UpdatePhase, ResizeEdge, Phase, FailureKind, DragState, TrackItem, PlaylistItem, LoadedRange, ChapterItem, ShortcutItem, ThemeProfiles, ThemeItem, ColorText, ParsedColor, CoverState } from "state.slint";
 export component AppWindow inherits Window {
     title: Player.media-title != "" ? Player.media-title : "Rona";
@@ -28,17 +29,25 @@ export component AppWindow inherits Window {
 
     property <length> playlist-width: 280px;
     property <length> recorder-width: 320px;
+    property <bool> recorder-in-sidebar: Panels.recorder-open && Settings.recorder-placement == 1;
+    property <bool> recorder-in-window: Panels.recorder-open && Settings.recorder-placement == 0;
+    changed recorder-in-window => { Panels.recorder-window-changed(self.recorder-in-window); }
     property <length> side-panel-reveal: Panels.playlist-open
         ? root.playlist-width
-        : Panels.recorder-open ? root.recorder-width : 0px;
+        : root.recorder-in-sidebar ? root.recorder-width : 0px;
     animate side-panel-reveal { duration: 200ms; easing: ease-out; }
     // Both flags are false while a panel slides out, so the last one opened stays drawn until it's gone.
-    property <bool> recorder-open: Panels.recorder-open;
-    property <bool> playlist-open: Panels.playlist-open;
     property <bool> recorder-opened-last;
-    changed recorder-open => { if (self.recorder-open) { self.recorder-opened-last = true; } }
+    // The sidebar recorder and the playlist share the right side, also when the setting moves an open recorder there.
+    changed recorder-in-sidebar => {
+        if (self.recorder-in-sidebar) {
+            self.recorder-opened-last = true;
+            Panels.playlist-open = false;
+        }
+    }
+    property <bool> playlist-open: Panels.playlist-open;
     changed playlist-open => { if (self.playlist-open) { self.recorder-opened-last = false; } }
-    property <bool> recorder-side:Panels.recorder-open || (!Panels.playlist-open && root.recorder-opened-last);
+    property <bool> recorder-side: root.recorder-in-sidebar || (!Panels.playlist-open && root.recorder-opened-last);
     property <length> menu-offset: Panels.tracks-open ? 0px : 8px;
     animate menu-offset { duration: 140ms; easing: ease-out; }
 
@@ -243,6 +252,7 @@ export component AppWindow inherits Window {
         width: max(root.recorder-width, root.side-panel-reveal);
         height: root.video-height;
         visible: root.recorder-side && root.side-panel-reveal > 0;
+        dismiss => { Panels.recorder-open = false; }
     }
 
     Rectangle {

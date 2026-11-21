@@ -15,6 +15,7 @@ mod mpv;
 mod opener;
 mod playlist;
 mod recorder;
+mod recorder_window;
 mod resume;
 mod settings;
 mod shortcuts;
@@ -293,6 +294,7 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn Error>> {
     wire_playback(&mpv, &app, &osd, &config);
     wire_window_controls(&app, &osd, &config, &saved_state);
     let _download_watch = watch_download(&app, &state);
+    recorder_window::create(&app, &mpv, &config)?;
     let _recorder = recorder::wire(&app, &mpv, state);
     updater::wire(&app, &config);
     let listener = server.map(|server| {
@@ -1271,7 +1273,7 @@ fn attach_video(
             let shadow_weak = app_weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(app) = shadow_weak.upgrade() {
-                    enable_window_shadow(&app);
+                    enable_window_shadow(app.window());
                     subclass_window(&app);
                     set_window_icons(&app);
                 }
@@ -1690,6 +1692,7 @@ fn wire_window_controls(app: &AppWindow, osd: &Osd, config: &SharedConfig, saved
             if close_config.borrow().remember_window {
                 state::remember_window(&app, &close_state);
             }
+            recorder_window::close_for_exit();
             log_error(app.window().hide());
         }
     });
@@ -1733,19 +1736,19 @@ fn resize_direction(edge: ResizeEdge) -> ResizeDirection {
 }
 
 #[cfg(target_os = "windows")]
-fn enable_window_shadow(app: &AppWindow) {
+fn enable_window_shadow(window: &slint::Window) {
     use slint::winit_030::winit::platform::windows::WindowExtWindows;
-    app.window().with_winit_window(|window| window.set_undecorated_shadow(true));
+    window.with_winit_window(|window| window.set_undecorated_shadow(true));
 }
 
 #[cfg(not(target_os = "windows"))]
-fn enable_window_shadow(_app: &AppWindow) {}
+fn enable_window_shadow(_window: &slint::Window) {}
 
 #[cfg(target_os = "windows")]
-fn window_hwnd(app: &AppWindow) -> Option<windows::Win32::Foundation::HWND> {
+fn window_hwnd(window: &slint::Window) -> Option<windows::Win32::Foundation::HWND> {
     use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-    app.window().with_winit_window(|window| {
+    window.with_winit_window(|window| {
         let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else { return None };
         Some(windows::Win32::Foundation::HWND(handle.hwnd.get() as *mut std::ffi::c_void))
     })?
@@ -1761,7 +1764,7 @@ fn set_pointer_hidden(app: &AppWindow, hidden: bool) {
     use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, HTCLIENT, SendMessageW, WM_MOUSEMOVE, WM_SETCURSOR, WindowFromPoint};
 
     POINTER_HIDDEN.store(hidden, Ordering::Relaxed);
-    let Some(hwnd) = window_hwnd(app) else { return };
+    let Some(hwnd) = window_hwnd(app.window()) else { return };
     let mut point = POINT::default();
     if unsafe { GetCursorPos(&mut point) }.is_err() || unsafe { WindowFromPoint(point) } != hwnd {
         return;
@@ -1780,7 +1783,7 @@ fn set_pointer_hidden(app: &AppWindow, hidden: bool) {
 fn subclass_window(app: &AppWindow) {
     use windows::Win32::UI::Shell::SetWindowSubclass;
 
-    let Some(hwnd) = window_hwnd(app) else { return };
+    let Some(hwnd) = window_hwnd(app.window()) else { return };
     if !unsafe { SetWindowSubclass(hwnd, Some(window_messages), 1, 0) }.as_bool() {
         error!("could not hook the window for fullscreen sizing and cursor hiding");
     }

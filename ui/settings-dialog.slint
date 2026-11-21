@@ -479,6 +479,17 @@ component InterfacePage inherits Page {
         }
     }
 
+    LabeledRow {
+        label: "Recorder opens as";
+
+        Segmented {
+            horizontal-stretch: 1;
+            options: ["Window", "Sidebar"];
+            current-index <=> Settings.recorder-placement;
+            selected => { Settings.changed(); }
+        }
+    }
+
     Gap {}
     SectionHeading { text: "FULLSCREEN"; }
 

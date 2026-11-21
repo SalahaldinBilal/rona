@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { Player, WindowControls, Panels, Recorder, Updates, Phase } from "state.slint";
+import { Player, WindowControls, Panels, Recorder, Settings, Updates, Phase } from "state.slint";
 import { Dot } from "components/dot.slint";
 import { Icon } from "components/icon.slint";
 import { IconButton } from "components/buttons.slint";
@@ -184,7 +184,7 @@ export component ControlBar inherits TouchArea {
                     opacity: root.dimmed;
                     clicked => {
                         Panels.recorder-open = !Panels.recorder-open;
-                        if (Panels.recorder-open) {
+                        if (Panels.recorder-open && Settings.recorder-placement == 1) {
                             Panels.playlist-open = false;
                         }
                     }
@@ -200,7 +200,7 @@ export component ControlBar inherits TouchArea {
                     enabled: root.shown;
                     clicked => {
                         Panels.playlist-open = !Panels.playlist-open;
-                        if (Panels.playlist-open) {
+                        if (Panels.playlist-open && Settings.recorder-placement == 1) {
                             Panels.recorder-open = false;
                         }
                     }
