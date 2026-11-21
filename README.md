@@ -31,12 +31,12 @@ The AppImage needs glibc 2.39 or newer, so Ubuntu 24.04, Fedora 40 or later. It 
 
 ## Building
 
-You need a recent stable Rust.
+You need a recent stable Rust, and Node.js 24 or newer for the helper scripts in `scripts/`.
 
 On Windows, download libmpv first:
 
 ```
-cargo xtask fetch-mpv
+node scripts/tasks.mts fetch-mpv
 cargo run --release
 ```
 
@@ -51,7 +51,7 @@ You can pass files or links to open them right away: `cargo run --release -- vid
 
 Debug builds work, but some parts of the interface are slow in them. Use `--release` if you want to see how it really feels.
 
-`cargo xtask package` builds the installer on Windows and the AppImage on Linux.
+`node scripts/tasks.mts package` builds the installer on Windows and the AppImage on Linux.
 
 macOS isn't supported yet.
 

@@ -477,6 +477,24 @@ mod tests {
         assert!(err.contains("doesn't match its signature"), "{err}");
     }
 
+    // Made by scripts/lib/minisign.mts, which signs releases, over the bytes "installer bytes".
+    const SCRIPT_PUBLIC_KEY: &str = "untrusted comment: minisign public key: DE343C9638D875F6
+RWT2ddg4ljw03iURz1A/kNXu5XlG3EZK36xINMms1Bjckdc9XYH+Yqda
+";
+    const SCRIPT_SIGNATURE: &str = "untrusted comment: signature from minisign secret key
+RUT2ddg4ljw03tRgSBDawRHodGIEZLmwUJ8/JekLA7vNz50S5U+UNoarG9Tsgqzbfw63GSIdFnoWkOE1/+YjGMuxKmrrXMbkTAk=
+trusted comment: timestamp:1795294747
+3VEmqDWcS8zo1ANLBq89S6ovtEFDhAk9XlV+ZHrmEnWIIjIsVxgYAkE4odyT/KNBsKPMG+4h4Ipjr/DYnFbsBA==
+";
+
+    #[test]
+    fn signatures_from_the_release_scripts_verify() {
+        let key = minisign_verify::PublicKey::decode(SCRIPT_PUBLIC_KEY.trim()).unwrap();
+        let signature = minisign_verify::Signature::decode(SCRIPT_SIGNATURE).unwrap();
+        assert!(key.verify(b"installer bytes", &signature, false).is_ok());
+        assert!(key.verify(b"installer byteS", &signature, false).is_err());
+    }
+
     #[test]
     fn changelog_notes_read_as_plain_text() {
         let notes = "### Added\n- Chapter skipping.\n- A Renderer setting.\n\n### Fixed\n- Fullscreen from maximized.";

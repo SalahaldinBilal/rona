@@ -3,5 +3,6 @@ target/
 /bundles
 /release-files
 /result
+/node_modules
 .direnv
 .envrc

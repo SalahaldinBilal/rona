@@ -15,14 +15,14 @@ jobs:
     if: github.actor == 'SalahaldinBilal'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Tag matches the app version
         if: github.ref_type == 'tag'
         run: |
           version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
           if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME doesn't match version $version in Cargo.toml. Run cargo xtask bump first."
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match version $version in Cargo.toml. Run node scripts/tasks.mts bump first."
             exit 1
           fi
 
@@ -42,9 +42,16 @@ jobs:
             bundle: target/packager/*.AppImage
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
+
+      # Node runs the .mts task scripts as they are, by stripping their types.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          # The scripts install nothing, so there is nothing to cache.
+          package-manager-cache: false
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -64,13 +71,13 @@ jobs:
 
       - name: Fetch libmpv
         if: matrix.name == 'windows'
-        run: cargo xtask fetch-mpv
+        run: node scripts/tasks.mts fetch-mpv
 
       - name: Package
         env:
           # linuxdeploy is itself an AppImage, and the runner has no FUSE to mount it.
           APPIMAGE_EXTRACT_AND_RUN: "1"
-        run: cargo xtask package
+        run: node scripts/tasks.mts package
 
       - name: The AppImage starts and loads libmpv
         if: matrix.name == 'linux'
@@ -82,7 +89,7 @@ jobs:
           "$appimage" --version
 
       - name: Upload bundle artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bundle-${{ matrix.name }}
           path: ${{ matrix.bundle }}
@@ -96,11 +103,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: bundle-*
           path: bundles
@@ -115,7 +125,7 @@ jobs:
           RONA_SIGN_KEY: ${{ secrets.RONA_SIGN_KEY }}
           RONA_SIGN_PASSWORD: ${{ secrets.RONA_SIGN_PASSWORD }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: cargo xtask deploy
+        run: node scripts/tasks.mts deploy
 
   nix:
     name: Nix (${{ matrix.runner }})
@@ -129,7 +139,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: DeterminateSystems/nix-installer-action@v23
       - uses: Mic92/niks3-action@v1
         continue-on-error: true
@@ -147,7 +157,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 

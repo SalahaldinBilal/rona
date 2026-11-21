@@ -1,4 +1,5 @@
-// Also compiled into xtask, which registers these with Windows in the installer.
+// Also read by scripts/lib/extensions.mts, which registers these with Windows in the installer. It expects each
+// list in this exact shape, with its length matching the entries.
 
 pub const VIDEO_EXTENSIONS: [&str; 24] = [
     "mkv", "mk3d", "webm", "mp4", "m4v", "mov", "3gp", "3g2", "avi", "wmv", "asf", "flv", "f4v", "ts", "m2ts", "mts",

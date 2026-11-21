@@ -1,0 +1,16 @@
+{
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "task": "node scripts/tasks.mts",
+    "test": "node --test \"scripts/test/*.test.mts\"",
+    "typecheck": "tsc"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^5.9"
+  }
+}

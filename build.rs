@@ -51,7 +51,7 @@ fn embed_windows_icon(tree: &resvg::usvg::Tree, out_dir: &Path) {
     resource.set_icon(&ico_path.to_string_lossy());
     resource.compile().expect("failed to embed the icon, the Windows SDK resource compiler is needed");
 
-    // The installer takes its icon from here, `cargo xtask package` points at it.
+    // The installer takes its icon from here, `node scripts/tasks.mts package` points at it.
     let profile_dir = profile_dir(out_dir).expect("OUT_DIR is not inside a cargo build folder");
     fs::copy(&ico_path, profile_dir.join("rona.ico")).expect("failed to copy icon.ico next to the exe");
 }
