@@ -83,6 +83,7 @@ const METADATA: u64 = 25;
 const OSD_DIMENSIONS: u64 = 26;
 const CHAPTER: u64 = 27;
 const SUB_VISIBILITY: u64 = 28;
+const VIDEO_OUT_PARAMS: u64 = 30;
 
 #[cfg(target_os = "linux")]
 const APP_ID: &str = "rona";
@@ -117,6 +118,7 @@ struct EventState {
     capture: Mutex<Option<Capture>>,
     video_bits_per_second: AtomicU64,
     picture: Mutex<Option<Picture>>,
+    video_aspect: Mutex<Option<f64>>,
     chapter_skip: Mutex<chapter_skip::ChapterSkip>,
     // When the current file started opening, and the download counter at that time.
     open_started: Mutex<Option<(Instant, u64)>>,
@@ -358,7 +360,8 @@ fn observe_properties(mpv: &Mpv) -> Result<(), mpv::Error> {
     mpv.observe_flag(EOF_REACHED, "eof-reached")?;
     mpv.observe_changes(METADATA, "metadata")?;
     mpv.observe_node(CACHE_STATE, "demuxer-cache-state")?;
-    mpv.observe_node(OSD_DIMENSIONS, "osd-dimensions")
+    mpv.observe_node(OSD_DIMENSIONS, "osd-dimensions")?;
+    mpv.observe_node(VIDEO_OUT_PARAMS, "video-out-params")
 }
 
 fn forward_mpv_events(mpv: &Mpv, app: &AppWindow, state: &Arc<EventState>) -> Result<(), mpv::Error> {
@@ -485,6 +488,13 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                     _ => None,
                 };
                 *state.picture.lock().unwrap() = picture;
+            }
+            Event::PropertyChange { id: VIDEO_OUT_PARAMS, value } => {
+                let aspect = match value {
+                    Some(PropertyValue::Node(params)) => aspect_from_video_params(&params),
+                    _ => None,
+                };
+                *state.video_aspect.lock().unwrap() = aspect;
             }
             Event::PropertyChange { id: CHAPTER_LIST, .. } => {
                 read_in_background(mpv, app, &state.chapter_refresh, read_chapters, apply_chapters);
@@ -1199,12 +1209,13 @@ fn attach_video(
                         height: size,
                     }
                 } else {
-                    Area {
+                    let area = Area {
                         x: 0,
                         y: (app.get_video_y() * scale).round() as i32,
                         width: (app.get_video_width() * scale).round() as i32,
                         height: (app.get_video_height() * scale).round() as i32,
-                    }
+                    };
+                    without_panel_bars(area, size.width as i32, *event_state.video_aspect.lock().unwrap())
                 };
                 let window_size = (size.width as i32, size.height as i32);
                 let picture = *event_state.picture.lock().unwrap();
@@ -1230,6 +1241,25 @@ fn picture_from_osd_dimensions(dimensions: &Node) -> Option<Picture> {
         right: value("mr")?,
         bottom: value("mb")?,
     })
+}
+
+fn aspect_from_video_params(params: &Node) -> Option<f64> {
+    let value = |key: &str| params.get(key).and_then(Node::number);
+    let (width, height) = (value("dw")?, value("dh")?);
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let turned = value("rotate").is_some_and(|degrees| degrees as i64 % 180 == 90);
+    Some(if turned { height / width } else { width / height })
+}
+
+// mpv puts subtitles in the bars, so the area only keeps the bars the video has at the window's full width.
+fn without_panel_bars(area: Area, full_width: i32, aspect: Option<f64>) -> Area {
+    let Some(aspect) = aspect else { return area };
+    let picture_height = |width: i32| f64::from(area.height).min(f64::from(width) / aspect);
+    let full_bars = f64::from(area.height) - picture_height(full_width);
+    let height = ((picture_height(area.width) + full_bars).round() as i32).min(area.height);
+    Area { y: area.y + (area.height - height) / 2, height, ..area }
 }
 
 fn schedule_video_redraw(app_weak: &slint::Weak<AppWindow>) {

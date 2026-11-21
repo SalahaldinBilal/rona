@@ -38,7 +38,7 @@ export component AppWindow inherits Window {
     property <bool> recorder-opened-last;
     changed recorder-open => { if (self.recorder-open) { self.recorder-opened-last = true; } }
     changed playlist-open => { if (self.playlist-open) { self.recorder-opened-last = false; } }
-    property <bool> recorder-side: Panels.recorder-open || (!Panels.playlist-open && root.recorder-opened-last);
+    property <bool> recorder-side:Panels.recorder-open || (!Panels.playlist-open && root.recorder-opened-last);
     property <length> menu-offset: Panels.tracks-open ? 0px : 8px;
     animate menu-offset { duration: 140ms; easing: ease-out; }
 
