@@ -12,6 +12,7 @@ use lofty::prelude::*;
 use lofty::probe::Probe;
 use slint::{Rgba8Pixel, SharedPixelBuffer};
 
+use crate::logging::debug;
 use crate::media;
 
 // Covers are kept decoded, so only the files around the current one stay cached.
@@ -133,7 +134,16 @@ pub fn start(on_read: impl Fn(Read) + Send + 'static) {
             };
             match job {
                 Job::Info(path) => {
+                    let started = std::time::Instant::now();
                     let info = read(Path::new(&path));
+                    debug!(
+                        "read {path} in {} ms: {}",
+                        started.elapsed().as_millis(),
+                        match &info {
+                            Some(info) => format!("cover {}", info.cover.is_some()),
+                            None => "unreadable".to_string(),
+                        }
+                    );
                     let summary = Summary {
                         title: info.as_ref().and_then(|info| info.title.clone()),
                         artist: info.as_ref().map(|info| info.artist.clone()).filter(|artist| !artist.is_empty()),
@@ -156,6 +166,9 @@ pub fn start(on_read: impl Fn(Read) + Send + 'static) {
                     cache.summaries.insert(path, Arc::new(Summary { title, artist, thumb }));
                     summaries_read += 1;
                     let refresh = cache.summary_queue.is_empty() || summaries_read % SUMMARY_BATCH == 0;
+                    if cache.summary_queue.is_empty() {
+                        debug!("read {summaries_read} playlist summaries so far, queue empty");
+                    }
                     drop(cache);
                     if refresh {
                         on_read(Read::Summaries);

@@ -1,9 +1,13 @@
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::fmt;
 use std::ptr;
-use std::sync::{Arc, OnceLock, Weak};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use libloading::Library;
+
+use crate::logging::{debug, info};
 
 const FORMAT_NONE: c_int = 0;
 const FORMAT_STRING: c_int = 1;
@@ -16,6 +20,7 @@ const FORMAT_NODE_MAP: c_int = 8;
 
 const EVENT_NONE: c_int = 0;
 const EVENT_SHUTDOWN: c_int = 1;
+const EVENT_LOG_MESSAGE: c_int = 2;
 const EVENT_COMMAND_REPLY: c_int = 5;
 const EVENT_START_FILE: c_int = 6;
 const EVENT_END_FILE: c_int = 7;
@@ -59,10 +64,18 @@ struct RawEvent {
 #[repr(C)]
 struct RawEventEndFile {
     reason: c_int,
-    _error: c_int,
+    error: c_int,
 }
 
 pub const END_FILE_REASON_ERROR: i32 = 4;
+
+#[repr(C)]
+struct RawEventLogMessage {
+    prefix: *const c_char,
+    level: *const c_char,
+    text: *const c_char,
+    _log_level: c_int,
+}
 
 #[repr(C)]
 struct RawEventHook {
@@ -211,11 +224,12 @@ pub enum Event {
     CommandFailed(String),
     CommandDone { id: u64, error: Option<String> },
     StartFile,
-    EndFile { reason: i32 },
+    EndFile { reason: i32, error: Option<String> },
     PlaybackRestart,
     PropertyChange { id: u64, value: Option<PropertyValue> },
     /// `kind` is the id given to `add_hook`. mpv waits until `continue_hook` is called with `id`.
     Hook { kind: u64, id: u64 },
+    Log { prefix: String, level: String, text: String },
     Other,
 }
 
@@ -229,6 +243,7 @@ struct Api {
     set_property_string: unsafe extern "C" fn(*mut Handle, *const c_char, *const c_char) -> c_int,
     hook_add: unsafe extern "C" fn(*mut Handle, u64, *const c_char, c_int) -> c_int,
     hook_continue: unsafe extern "C" fn(*mut Handle, u64) -> c_int,
+    request_log_messages: unsafe extern "C" fn(*mut Handle, *const c_char) -> c_int,
     free: unsafe extern "C" fn(*mut c_void),
     stream_cb_add_ro: unsafe extern "C" fn(*mut Handle, *const c_char, *mut c_void, StreamOpenFn) -> c_int,
     wait_event: unsafe extern "C" fn(*mut Handle, f64) -> *mut RawEvent,
@@ -254,7 +269,10 @@ impl Api {
         let mut failures = Vec::new();
         for name in LIBRARY_NAMES {
             match unsafe { Library::new(*name) } {
-                Ok(library) => return unsafe { Self::from_library(library) },
+                Ok(library) => {
+                    info!("loaded {name}");
+                    return unsafe { Self::from_library(library) };
+                }
                 Err(err) => match std::error::Error::source(&err) {
                     Some(cause) => failures.push(format!("{name}: {err}: {cause}")),
                     None => failures.push(format!("{name}: {err}")),
@@ -276,6 +294,7 @@ impl Api {
                 set_property_string: symbol(&library, b"mpv_set_property_string\0")?,
                 hook_add: symbol(&library, b"mpv_hook_add\0")?,
                 hook_continue: symbol(&library, b"mpv_hook_continue\0")?,
+                request_log_messages: symbol(&library, b"mpv_request_log_messages\0")?,
                 free: symbol(&library, b"mpv_free\0")?,
                 stream_cb_add_ro: symbol(&library, b"mpv_stream_cb_add_ro\0")?,
                 wait_event: symbol(&library, b"mpv_wait_event\0")?,
@@ -325,10 +344,16 @@ unsafe extern "C" fn lookup_proc_address(ctx: *mut c_void, name: *const c_char) 
     lookup(unsafe { CStr::from_ptr(name) }) as *mut c_void
 }
 
+// Ids for `command`, kept apart from the ids callers pass to `command_with_id`.
+const UNNAMED_COMMAND_BIT: u64 = 1 << 63;
+
 struct Inner {
     api: Api,
     handle: *mut Handle,
     wakeup: OnceLock<Callback>,
+    next_command: AtomicU64,
+    // What each queued command was, so a failure can say which one failed.
+    pending_commands: Mutex<HashMap<u64, String>>,
 }
 
 // The mpv client API is thread safe, and the callbacks it stores are Send + Sync.
@@ -383,8 +408,15 @@ impl Mpv {
         if handle.is_null() {
             return Err(Error("mpv_create failed".into()));
         }
-        let inner = Inner { api, handle, wakeup: OnceLock::new() };
+        let inner = Inner {
+            api,
+            handle,
+            wakeup: OnceLock::new(),
+            next_command: AtomicU64::new(1),
+            pending_commands: Mutex::new(HashMap::new()),
+        };
         for (name, value) in options {
+            debug!("option {name} = {value}");
             inner.set_option(name, value)?;
         }
         inner.api.check(unsafe { (inner.api.initialize)(inner.handle) }, "mpv_initialize")?;
@@ -397,11 +429,22 @@ impl Mpv {
 
     /// Queues the command without waiting for it, failures arrive later as `Event::CommandFailed`.
     pub fn command(&self, args: &[&str]) -> Result<(), Error> {
-        self.command_with_id(0, args)
+        let id = self.0.next_command.fetch_add(1, Ordering::Relaxed) | UNNAMED_COMMAND_BIT;
+        self.pending_commands().insert(id, format!("{args:?}"));
+        let result = self.command_with_id(id, args);
+        if result.is_err() {
+            self.pending_commands().remove(&id);
+        }
+        result
+    }
+
+    fn pending_commands(&self) -> std::sync::MutexGuard<'_, HashMap<u64, String>> {
+        self.0.pending_commands.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Like `command`, but a non-zero id also reports completion as `Event::CommandDone`.
     pub fn command_with_id(&self, id: u64, args: &[&str]) -> Result<(), Error> {
+        debug!("command {args:?}");
         let owned = args.iter().map(|arg| cstring(arg)).collect::<Result<Vec<_>, _>>()?;
         let mut pointers: Vec<*const c_char> =
             owned.iter().map(|arg| arg.as_ptr()).chain(std::iter::once(ptr::null())).collect();
@@ -450,6 +493,7 @@ impl Mpv {
 
     /// Waits on mpv's core, unlike `command`. Used inside hooks, where mpv waits for us anyway.
     pub fn set_property(&self, name: &str, value: &str) -> Result<(), Error> {
+        debug!("set {name} = {value}");
         let (name_c, value_c) = (cstring(name)?, cstring(value)?);
         let code = unsafe { (self.0.api.set_property_string)(self.0.handle, name_c.as_ptr(), value_c.as_ptr()) };
         self.0.api.check(code, &format!("setting {name}"))
@@ -459,6 +503,13 @@ impl Mpv {
         let name_c = cstring(name)?;
         let code = unsafe { (self.0.api.hook_add)(self.0.handle, kind, name_c.as_ptr(), 0) };
         self.0.api.check(code, &format!("adding the {name} hook"))
+    }
+
+    /// mpv's messages at `level` and above arrive as `Event::Log`.
+    pub fn request_log_messages(&self, level: &str) -> Result<(), Error> {
+        let level_c = cstring(level)?;
+        let code = unsafe { (self.0.api.request_log_messages)(self.0.handle, level_c.as_ptr()) };
+        self.0.api.check(code, &format!("requesting {level} log messages"))
     }
 
     pub fn continue_hook(&self, id: u64) -> Result<(), Error> {
@@ -484,6 +535,10 @@ impl Mpv {
         Ok(())
     }
 
+    fn error_text(&self, code: c_int) -> String {
+        unsafe { CStr::from_ptr((self.0.api.error_string)(code)) }.to_string_lossy().into_owned()
+    }
+
     pub fn next_event(&self) -> Option<Event> {
         let event = unsafe { &*(self.0.api.wait_event)(self.0.handle, 0.0) };
         match event.event_id {
@@ -492,22 +547,33 @@ impl Mpv {
             EVENT_START_FILE => Some(Event::StartFile),
             EVENT_END_FILE => {
                 let end = unsafe { &*(event.data as *const RawEventEndFile) };
-                Some(Event::EndFile { reason: end.reason })
+                let error = (end.error < 0).then(|| self.error_text(end.error));
+                Some(Event::EndFile { reason: end.reason, error })
             }
             EVENT_PLAYBACK_RESTART => Some(Event::PlaybackRestart),
+            EVENT_LOG_MESSAGE => {
+                let message = unsafe { &*(event.data as *const RawEventLogMessage) };
+                let text = |pointer: *const c_char| unsafe { CStr::from_ptr(pointer) }.to_string_lossy().into_owned();
+                Some(Event::Log {
+                    prefix: text(message.prefix),
+                    level: text(message.level),
+                    text: text(message.text).trim_end().to_string(),
+                })
+            }
             EVENT_HOOK => {
                 let hook = unsafe { &*(event.data as *const RawEventHook) };
                 Some(Event::Hook { kind: event.reply_userdata, id: hook.id })
             }
             EVENT_COMMAND_REPLY => {
-                let error = (event.error < 0).then(|| {
-                    let message = unsafe { CStr::from_ptr((self.0.api.error_string)(event.error)) };
-                    message.to_string_lossy().into_owned()
-                });
-                match (event.reply_userdata, error) {
-                    (0, None) => Some(Event::Other),
-                    (0, Some(message)) => Some(Event::CommandFailed(message)),
-                    (id, error) => Some(Event::CommandDone { id, error }),
+                let error = (event.error < 0).then(|| self.error_text(event.error));
+                let id = event.reply_userdata;
+                if id & UNNAMED_COMMAND_BIT == 0 {
+                    return Some(Event::CommandDone { id, error });
+                }
+                let command = self.pending_commands().remove(&id).unwrap_or_default();
+                match error {
+                    None => Some(Event::Other),
+                    Some(message) => Some(Event::CommandFailed(format!("{command}: {message}"))),
                 }
             }
             EVENT_PROPERTY_CHANGE => {

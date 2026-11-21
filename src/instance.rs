@@ -3,6 +3,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::logging::{debug, warn};
+
 const NAME: &str = "rona";
 // The running window can be closing when another launch reaches it, so the claim is tried again.
 const ATTEMPTS: usize = 3;
@@ -37,6 +39,7 @@ fn claim_named(name: &str, launch: &Launch) -> Claim {
     let message = encode(launch);
     for attempt in 0..ATTEMPTS {
         if attempt > 0 {
+            debug!("the running window didn't take the files, claiming again");
             std::thread::sleep(RETRY_DELAY);
         }
         match platform::try_serve(name) {
@@ -59,7 +62,7 @@ fn claim_named(name: &str, launch: &Launch) -> Claim {
 }
 
 fn alone(err: io::Error) -> Claim {
-    eprintln!("running as a separate window: {err}");
+    warn!("running as a separate window: {err}");
     Claim::Alone
 }
 
@@ -91,10 +94,10 @@ fn answer(mut connection: impl Read + Write, on_message: &OnMessage) {
         Ok(message) => {
             let reply = if on_message(message) { ACCEPTED } else { 0 };
             if let Err(err) = connection.write_all(&[reply]) {
-                eprintln!("could not answer another launch: {err}");
+                warn!("could not answer another launch: {err}");
             }
         }
-        Err(err) => eprintln!("could not read the files from another launch: {err}"),
+        Err(err) => warn!("could not read the files from another launch: {err}"),
     }
 }
 
@@ -234,7 +237,7 @@ mod platform {
                 if let Err(err) = unsafe { ConnectNamedPipe(handle(&pipe), None) }
                     && err.code() != ERROR_PIPE_CONNECTED.to_hresult()
                 {
-                    eprintln!("stopped listening for other launches: {err}");
+                    crate::logging::warn!("stopped listening for other launches: {err}");
                     return;
                 }
                 let next = create(&name, false);
@@ -243,7 +246,7 @@ mod platform {
                 match next {
                     Ok(next) => pipe = next,
                     Err(err) => {
-                        eprintln!("stopped listening for other launches: {err}");
+                        crate::logging::warn!("stopped listening for other launches: {err}");
                         return;
                     }
                 }
@@ -319,7 +322,7 @@ mod platform {
                         let on_message = on_message.clone();
                         std::thread::spawn(move || super::answer(stream, &on_message));
                     }
-                    Err(err) => eprintln!("could not accept another launch: {err}"),
+                    Err(err) => crate::logging::warn!("could not accept another launch: {err}"),
                 }
             }
         }

@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
+use crate::logging::{debug, info, warn};
+
 pub const PROTOCOL: &str = "rpcache";
 
 pub const DEFAULT_CACHE_MIB: u64 = 512;
@@ -15,6 +17,7 @@ const CHUNK_SIZE: u64 = 1024 * 1024;
 const READ_BUFFER_SIZE: usize = 64 * 1024;
 const RETRY_DELAYS: [Duration; 3] = [Duration::from_secs(3), Duration::from_secs(6), Duration::from_secs(12)];
 const RETRY_POLL: Duration = Duration::from_millis(100);
+const SLOW_CHUNK: Duration = Duration::from_secs(5);
 
 #[derive(Clone, PartialEq)]
 pub struct NetworkOptions {
@@ -233,6 +236,7 @@ struct ByteCache {
     insertion_order: VecDeque<u64>,
     size: Option<u64>,
     read_head: u64,
+    evicting: bool,
 }
 
 impl ByteCache {
@@ -246,6 +250,10 @@ impl ByteCache {
         }
         while self.chunks.len() > MAX_CACHED_CHUNKS.load(Ordering::Relaxed) {
             let Some(oldest) = self.insertion_order.pop_front() else { break };
+            if !self.evicting {
+                self.evicting = true;
+                info!("byte cache full at {} MiB, dropping the oldest chunks from now on", self.chunks.len());
+            }
             self.chunks.remove(&oldest);
         }
     }
@@ -263,6 +271,9 @@ fn cache_for(url: &str) -> Arc<Mutex<ByteCache>> {
             return cache.clone();
         }
     }
+    if let Some((cached_url, cache)) = current.as_ref() {
+        info!("dropping the byte cache of {cached_url} ({} MiB)", lock(cache).chunks.len());
+    }
     let cache = Arc::new(Mutex::new(ByteCache::default()));
     *current = Some((url.to_string(), cache.clone()));
     cache
@@ -279,7 +290,13 @@ impl Connection {
     }
 }
 
+static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(1);
+
 struct HttpStream {
+    // Numbers each open in the log, since mpv can still hold the previous file's stream while opening the next.
+    id: u64,
+    downloaded: u64,
+    download_time: Duration,
     url: String,
     agent: ureq::Agent,
     cache: Arc<Mutex<ByteCache>>,
@@ -290,11 +307,12 @@ struct HttpStream {
 }
 
 impl HttpStream {
-    fn open(url: &str) -> Result<Self, ureq::Error> {
+    fn open(id: u64, url: &str) -> Result<Self, ureq::Error> {
         let agent = agent();
         CONNECTION_STATE.store(STATE_FINE, Ordering::Relaxed);
         RETRY_REQUESTED.store(false, Ordering::Relaxed);
         note_progress();
+        let started = Instant::now();
         let response = range_request(&agent, url, 0)?;
         let (supports_ranges, size) = if response.status().as_u16() == 206 {
             (true, header(&response, "Content-Range").and_then(total_size))
@@ -302,9 +320,19 @@ impl HttpStream {
             let accepts = header(&response, "Accept-Ranges").is_some_and(|value| value.eq_ignore_ascii_case("bytes"));
             (accepts, header(&response, "Content-Length").and_then(|value| value.parse().ok()))
         };
+        info!(
+            "stream #{id}: {} after {} ms, size {}, ranges {}",
+            response.status().as_u16(),
+            started.elapsed().as_millis(),
+            size.map_or("unknown".to_string(), |size| format!("{} MiB", size / CHUNK_SIZE)),
+            if supports_ranges { "supported" } else { "not supported" }
+        );
         let cache = cache_for(url);
         lock(&cache).size = size;
         Ok(Self {
+            id,
+            downloaded: 0,
+            download_time: Duration::ZERO,
             url: url.to_string(),
             agent,
             cache,
@@ -321,7 +349,7 @@ impl HttpStream {
             Ok(chunk) => chunk,
             Err(err) if cancelled.load(Ordering::Relaxed) => return Err(err),
             Err(err) => {
-                eprintln!("stream read failed, reconnecting: {err}");
+                warn!("stream #{}: read at byte {} failed, reconnecting: {err}", self.id, self.position);
                 self.reconnect(index, cancelled)?
             }
         };
@@ -351,6 +379,7 @@ impl HttpStream {
             self.connection = None;
             match self.chunk(index, cancelled) {
                 Ok(chunk) => {
+                    info!("stream #{}: reconnected", self.id);
                     CONNECTION_STATE.store(STATE_FINE, Ordering::Relaxed);
                     return Ok(chunk);
                 }
@@ -359,7 +388,7 @@ impl HttpStream {
                     return Err(err);
                 }
                 Err(err) => {
-                    eprintln!("reconnecting failed: {err}");
+                    warn!("stream #{}: reconnecting failed, trying again in {} s: {err}", self.id, RETRY_DELAYS[attempt].as_secs());
                     delay = Some(RETRY_DELAYS[attempt]);
                     attempt = (attempt + 1).min(RETRY_DELAYS.len() - 1);
                 }
@@ -369,8 +398,10 @@ impl HttpStream {
 
     fn seek(&mut self, offset: i64) -> i64 {
         if offset < 0 || self.size.is_some_and(|size| offset as u64 > size) {
+            warn!("stream #{}: seek to byte {offset} is outside the file", self.id);
             return ERROR_GENERIC;
         }
+        debug!("stream #{}: seek from byte {} to {offset}", self.id, self.position);
         self.position = offset as u64;
         offset
     }
@@ -393,20 +424,24 @@ impl HttpStream {
             return Ok(());
         }
         if self.supports_ranges {
+            let started = Instant::now();
             let response = range_request(&self.agent, &self.url, start).map_err(|err| err.to_string())?;
             let expected = format!("bytes {start}-");
             let status = response.status().as_u16();
             let starts_here =
                 status == 206 && header(&response, "Content-Range").is_some_and(|range| range.starts_with(&expected));
+            debug!("stream #{}: request from byte {start}: {status} after {} ms", self.id, started.elapsed().as_millis());
             if starts_here {
                 self.connection = Some(Connection::new(response, start));
                 return Ok(());
             }
+            warn!("stream #{}: the server ignored the range, reading forward from here on", self.id);
             self.supports_ranges = false;
             self.connection = (status == 200).then(|| Connection::new(response, 0));
         }
 
         if self.connection.as_ref().is_none_or(|connection| connection.position > start) {
+            info!("stream #{}: downloading again from the start to reach byte {start}", self.id);
             let response = self.agent.get(&self.url).call().map_err(|err| err.to_string())?;
             self.connection = Some(Connection::new(response, 0));
         }
@@ -420,6 +455,7 @@ impl HttpStream {
 
     fn download_next_chunk(&mut self, cancelled: &AtomicBool) -> Result<Option<Arc<[u8]>>, String> {
         let mut connection = self.connection.take().ok_or("no open connection")?;
+        let started = Instant::now();
         let mut data = Vec::with_capacity(CHUNK_SIZE as usize);
         let mut buffer = vec![0u8; READ_BUFFER_SIZE];
         while (data.len() as u64) < CHUNK_SIZE {
@@ -433,6 +469,7 @@ impl HttpStream {
                 if self.size.is_some_and(|size| connection.position + (data.len() as u64) < size) {
                     return Err("the server closed the connection before the end".into());
                 }
+                debug!("stream #{}: downloaded to the end of the file", self.id);
                 break;
             }
             DOWNLOADED_BYTES.fetch_add(read as u64, Ordering::Relaxed);
@@ -444,6 +481,14 @@ impl HttpStream {
         }
 
         let index = connection.position / CHUNK_SIZE;
+        let elapsed = started.elapsed();
+        if self.downloaded == 0 {
+            info!("stream #{}: first chunk ({index}) took {} ms", self.id, elapsed.as_millis());
+        } else if elapsed >= SLOW_CHUNK {
+            warn!("stream #{}: chunk {index} took {} s", self.id, elapsed.as_secs());
+        }
+        self.downloaded += data.len() as u64;
+        self.download_time += elapsed;
         connection.position += data.len() as u64;
         self.connection = Some(connection);
         let chunk: Arc<[u8]> = data.into();
@@ -461,6 +506,7 @@ fn total_size(content_range: &str) -> Option<u64> {
 }
 
 struct Cookie {
+    id: u64,
     cancelled: AtomicBool,
     stream: Mutex<HttpStream>,
 }
@@ -470,9 +516,11 @@ pub unsafe extern "C" fn open_stream(_user_data: *mut c_void, uri: *mut c_char, 
     let Some(url) = uri.strip_prefix(PROTOCOL).and_then(|rest| rest.strip_prefix("://")) else {
         return ERROR_LOADING_FAILED;
     };
-    match HttpStream::open(url) {
+    let id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
+    info!("stream #{id}: opening {url}");
+    match HttpStream::open(id, url) {
         Ok(stream) => {
-            let cookie = Box::new(Cookie { cancelled: AtomicBool::new(false), stream: Mutex::new(stream) });
+            let cookie = Box::new(Cookie { id, cancelled: AtomicBool::new(false), stream: Mutex::new(stream) });
             let info = unsafe { &mut *(info as *mut StreamInfo) };
             info.cookie = Box::into_raw(cookie) as *mut c_void;
             info.read_fn = Some(read_stream);
@@ -483,7 +531,7 @@ pub unsafe extern "C" fn open_stream(_user_data: *mut c_void, uri: *mut c_char, 
             0
         }
         Err(err) => {
-            eprintln!("could not open {url}: {err}");
+            warn!("stream #{id}: could not open: {err}");
             let host = crate::media::link_host(url);
             *lock(&OPEN_ERROR) = Some(network_error_text(&err, &host));
             ERROR_LOADING_FAILED
@@ -497,8 +545,10 @@ unsafe extern "C" fn read_stream(cookie: *mut c_void, buffer: *mut c_char, size:
     match lock(&cookie.stream).read(buffer, &cookie.cancelled) {
         Ok(count) => count as i64,
         Err(err) => {
-            if !cookie.cancelled.load(Ordering::Relaxed) {
-                eprintln!("stream read failed: {err}");
+            if cookie.cancelled.load(Ordering::Relaxed) {
+                debug!("stream #{}: read stopped by the cancel", cookie.id);
+            } else {
+                warn!("stream #{}: read failed: {err}", cookie.id);
             }
             -1
         }
@@ -516,10 +566,20 @@ unsafe extern "C" fn stream_size(cookie: *mut c_void) -> i64 {
 }
 
 unsafe extern "C" fn close_stream(cookie: *mut c_void) {
-    drop(unsafe { Box::from_raw(cookie as *mut Cookie) });
+    let cookie = unsafe { Box::from_raw(cookie as *mut Cookie) };
+    let stream = lock(&cookie.stream);
+    info!(
+        "stream #{}: closed at byte {}, {} KiB downloaded at {:.0} KiB/s",
+        stream.id,
+        stream.position,
+        stream.downloaded / 1024,
+        stream.downloaded as f64 / 1024.0 / stream.download_time.as_secs_f64().max(0.001)
+    );
 }
 
+// mpv calls this from another thread while a read may be waiting on the network, so it only sets the flag.
 unsafe extern "C" fn cancel_stream(cookie: *mut c_void) {
     let cookie = unsafe { &*(cookie as *const Cookie) };
     cookie.cancelled.store(true, Ordering::Relaxed);
+    info!("stream #{}: cancelled", cookie.id);
 }

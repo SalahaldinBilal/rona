@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
+use crate::logging::{debug, info};
 use crate::mpv::Mpv;
 use crate::state::{self, PlayModes, Repeat, SharedState};
 use crate::{AppWindow, CoverState, Player, PlaylistItem, audio_info, file_display_name, log_error, media, opener};
@@ -144,6 +145,13 @@ pub fn starting(paths: &[String]) {
     with_playlist(|playlist| {
         playlist.audio = !paths.is_empty() && paths.iter().all(|path| media::is_audio_name(path));
         playlist.modes = playlist.saved_modes();
+        info!(
+            "new {} playlist of {}, shuffle {}, repeat {:?}",
+            if playlist.audio { "audio" } else { "video" },
+            paths.len(),
+            playlist.modes.shuffle,
+            playlist.modes.repeat
+        );
         playlist.fresh = true;
         playlist.restoring.clear();
         playlist.removed.clear();
@@ -379,12 +387,14 @@ impl Playlist {
         {
             target = self.move_in_mpv(target, current + 1);
         }
+        info!("playing playlist entry {index} ({})", self.play.get(target).map_or("", |entry| entry.filename.as_str()));
         log_error(self.mpv.command(&["playlist-play-index", &target.to_string()]));
     }
 
     fn play_entry_next(&mut self, index: i32) {
         let (Some(id), Some(current)) = (self.list_id(index), self.current()) else { return };
         let Some(from) = self.play_index(id).filter(|from| *from != current) else { return };
+        info!("playing playlist entry {index} next");
         if self.modes.shuffle {
             self.move_in_mpv(from, current + 1);
         } else {
@@ -403,6 +413,7 @@ impl Playlist {
             return;
         }
         let id = self.list[from];
+        debug!("moving playlist entry {from} to {to}");
         if !self.modes.shuffle {
             let target = match self.list.get(to) {
                 Some(before) => self.play_index(*before),
@@ -424,6 +435,7 @@ impl Playlist {
         let played = self.current().is_some_and(|current| play_index <= current);
         log_error(self.mpv.command(&["playlist-remove", &play_index.to_string()]));
         let entry = self.play.remove(play_index);
+        info!("removed playlist entry {list_index} ({})", entry.filename);
         self.list.remove(list_index);
         if let Some(app) = self.app.upgrade() {
             app.global::<Player>().set_undo_text(format!("Removed {}", entry.title).into());
@@ -458,12 +470,14 @@ impl Playlist {
                 None => self.play.len(),
             },
         };
+        info!("putting back {} at {index}", removed.filename);
         log_error(self.mpv.command(&["loadfile", &removed.filename, "insert-at", &index.to_string()]));
         self.restoring.push((removed.filename, removed.list_index));
     }
 
     fn toggle_shuffle(&mut self) {
         self.modes.shuffle = !self.modes.shuffle;
+        info!("shuffle {}", if self.modes.shuffle { "on" } else { "off" });
         self.save_modes();
         self.show_modes();
         let order = if self.modes.shuffle { self.shuffled_order() } else { self.list.clone() };
@@ -474,6 +488,7 @@ impl Playlist {
 
     fn cycle_repeat(&mut self) {
         self.modes.repeat = self.modes.repeat.next();
+        info!("repeat {:?}", self.modes.repeat);
         self.save_modes();
         self.show_modes();
         self.send_repeat();

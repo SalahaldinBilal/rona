@@ -7,6 +7,7 @@ use std::time::Duration;
 use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
 use crate::color;
+use crate::logging::{info, warn};
 use crate::settings::{self, SharedConfig};
 use crate::{AppWindow, Theme, ThemeItem, ThemeProfiles};
 
@@ -293,6 +294,7 @@ impl Profiles {
     fn select(&mut self, index: i32) {
         self.flush();
         self.current = usize::try_from(index - 1).ok().filter(|index| *index < self.names.len());
+        info!("theme profile {}", self.current_name().unwrap_or(DEFAULT_NAME));
         self.load_current();
         self.remember_choice();
         self.show_all();
@@ -305,6 +307,7 @@ impl Profiles {
         else {
             return;
         };
+        info!("new theme profile {name}");
         self.names.push(name.clone());
         sort_names(&mut self.names);
         self.current = self.names.iter().position(|other| *other == name);
@@ -321,9 +324,10 @@ impl Profiles {
             && let Err(err) = std::fs::remove_file(&path)
             && err.kind() != std::io::ErrorKind::NotFound
         {
-            eprintln!("could not delete {}: {err}", path.display());
+            warn!("could not delete {}: {err}", path.display());
             return;
         }
+        info!("deleted theme profile {}", self.names[index]);
         self.names.remove(index);
         self.current = None;
         self.load_current();
@@ -340,13 +344,14 @@ impl Profiles {
         if let Some(folder) = folder() {
             let (from, to) = (folder.join(file_name(&self.names[index])), folder.join(file_name(name)));
             if let Err(err) = std::fs::rename(&from, &to) {
-                eprintln!("could not rename {} to {}: {err}", from.display(), to.display());
+                warn!("could not rename {} to {}: {err}", from.display(), to.display());
                 if let Some(app) = self.app.upgrade() {
                     self.show_names(&app.global::<ThemeProfiles>());
                 }
                 return;
             }
         }
+        info!("renamed theme profile {} to {name}", self.names[index]);
         self.names[index] = name.to_string();
         sort_names(&mut self.names);
         self.current = self.names.iter().position(|other| other == name);

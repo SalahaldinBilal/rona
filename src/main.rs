@@ -9,6 +9,7 @@ mod color;
 mod extensions;
 mod http_cache;
 mod instance;
+mod logging;
 mod media;
 mod mpv;
 mod opener;
@@ -45,6 +46,7 @@ use slint::{
 };
 
 use http_cache::ConnectionState;
+use logging::{debug, error, info, warn};
 use mpv::{Event, Mpv, Node, PropertyValue};
 use capture::Capture;
 use instance::Claim;
@@ -198,14 +200,39 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
+    logging::init();
+    info!(
+        "Rona {} starting, process {}, {} {}",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id(),
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    info!("arguments: {:?}, new instance: {}", arguments.sources, arguments.new_instance);
+    let result = run(arguments);
+    match &result {
+        Ok(()) => info!("exiting"),
+        Err(err) => error!("exiting after an error: {err}"),
+    }
+    logging::flush();
+    result
+}
+
+fn run(arguments: Arguments) -> Result<(), Box<dyn Error>> {
     let capture = Capture::from_env();
     // Claimed before anything slow, so files opened together all reach the same window.
     let server = if arguments.new_instance || capture.is_some() {
         None
     } else {
         match instance::claim(&arguments.sources) {
-            Claim::Forwarded => return Ok(()),
-            Claim::Primary(server) => Some(server),
+            Claim::Forwarded => {
+                info!("handed the files to the running window");
+                return Ok(());
+            }
+            Claim::Primary(server) => {
+                info!("this is the primary window");
+                Some(server)
+            }
             Claim::Alone => None,
         }
     };
@@ -220,7 +247,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         WindowAttributesExtX11::with_name(attributes, APP_ID, APP_ID)
     });
     if let Err(err) = backend.select() {
-        eprintln!("desktop OpenGL is not available, falling back to the default renderer: {err}");
+        warn!("desktop OpenGL is not available, falling back to the default renderer: {err}");
     }
 
     let config: SharedConfig = Rc::new(RefCell::new(settings::load()));
@@ -232,6 +259,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         state::restore_window(&app, &saved_state.borrow());
     }
     let mpv = Mpv::new()?;
+    // Verbose, so a slow open or a stall can be followed step by step next to Rona's own lines.
+    log_error(mpv.request_log_messages("v"));
+    info!("mpv {}, ffmpeg {}", mpv.get_string("mpv-version").unwrap_or_default(), mpv.get_string("ffmpeg-version").unwrap_or_default());
     mpv.add_stream_protocol(http_cache::PROTOCOL, http_cache::open_stream)?;
     observe_properties(&mpv)?;
     settings::wire(&mpv, &app, &config);
@@ -255,6 +285,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
     forward_mpv_events(&mpv, &app, &state)?;
     let renderer = config.borrow().renderer();
+    info!("renderer setting: {}", if renderer == video::Renderer::OpenGl { "OpenGL" } else { "Direct3D 11" });
     attach_video(&mpv, &app, loader.clone(), state.clone(), renderer)
         .map_err(|err| format!("could not attach the video renderer: {err:?}"))?;
 
@@ -271,6 +302,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             // A hidden window is closing, so that launch opens its own window instead.
             let queued = app_weak.upgrade_in_event_loop(move |app| {
                 let visible = app.window().is_visible();
+                info!("another launch sent {:?}{}", launch.sources, if visible { "" } else { ", refused while closing" });
                 if visible {
                     bring_to_front(&app, launch.activation_token.as_deref());
                     opener::queue_arguments(launch.sources);
@@ -286,7 +318,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         opener::open_arguments(&arguments.sources);
     }
 
+    info!("window ready");
     app.run()?;
+    info!("event loop ended");
     if let Some(listener) = &listener {
         listener.stop();
     }
@@ -317,7 +351,7 @@ fn activate_on_wayland(window: &slint::winit_030::winit::window::Window, token: 
         return;
     };
     if let Err(err) = wayland::activate(display.display, surface.surface, token) {
-        eprintln!("could not bring the window to the front: {err}");
+        warn!("could not bring the window to the front: {err}");
     }
 }
 
@@ -400,6 +434,7 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                 update_time_text(player);
             }
             Event::PropertyChange { id: PAUSE, value: Some(PropertyValue::Flag(paused)) } => {
+                info!("{} at {:.1} s", if paused { "paused" } else { "playing" }, player.get_position());
                 player.set_paused(paused);
                 update_window_level(app);
                 if paused && player.get_phase() == Phase::Playing {
@@ -407,6 +442,7 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                 }
             }
             Event::Hook { kind, id } => {
+                debug!("mpv hook {}", if kind == resume::HOOK_LOAD { "on_load" } else { "on_unload" });
                 if kind == resume::HOOK_LOAD {
                     volume::file_loading(&mpv.get_string("stream-open-filename").unwrap_or_default());
                 }
@@ -436,6 +472,7 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
             }
             Event::PropertyChange { id: HWDEC, value } => {
                 let decoder = text(value);
+                debug!("hardware decoder: {}", if decoder.is_empty() { "none" } else { &decoder });
                 player.set_hardware_decoding(!decoder.is_empty() && decoder != "no");
             }
             Event::PropertyChange { id: VIDEO_HEIGHT, value } => {
@@ -500,17 +537,24 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                 read_in_background(mpv, app, &state.chapter_refresh, read_chapters, apply_chapters);
             }
             Event::PropertyChange { id: PAUSED_FOR_CACHE, value: Some(PropertyValue::Flag(waiting)) } => {
+                if waiting != player.get_buffering() {
+                    info!("{} at {:.1} s", if waiting { "buffering" } else { "buffered" }, player.get_position());
+                }
                 player.set_buffering(waiting);
             }
             Event::PropertyChange { id: BUFFERING_STATE, value } => {
                 player.set_buffer_percent(number(value).unwrap_or(0.0) as i32);
             }
             Event::PropertyChange { id: SEEKING, value: Some(PropertyValue::Flag(seeking)) } => {
+                if seeking != player.get_seeking() {
+                    debug!("{} at {:.1} s", if seeking { "seeking" } else { "seek done" }, player.get_position());
+                }
                 player.set_seeking(seeking);
             }
             Event::PropertyChange { id: PATH, value } => {
                 let path = text(value);
                 if !path.is_empty() {
+                    info!("path: {path}");
                     let info = media::describe_source(&path);
                     player.set_opening_name(info.name.into());
                     player.set_place(info.place.into());
@@ -528,6 +572,7 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                 }
             }
             Event::PropertyChange { id: IDLE_ACTIVE, value: Some(PropertyValue::Flag(true)) } => {
+                info!("mpv is idle");
                 if matches!(player.get_phase(), Phase::Opening | Phase::Playing) {
                     player.set_phase(Phase::Idle);
                     player.set_media_title(SharedString::new());
@@ -536,6 +581,9 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                 }
             }
             Event::PropertyChange { id: EOF_REACHED, value: Some(PropertyValue::Flag(reached)) } => {
+                if reached {
+                    info!("reached the end at {:.1} s", player.get_position());
+                }
                 player.set_ended(reached);
             }
             // mpv empties the tags while switching files, so they're only followed live once playing.
@@ -554,6 +602,7 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                 }
             }
             Event::StartFile => {
+                info!("mpv started a file (was {:?})", player.get_phase());
                 // Going straight from one audio file to the next keeps the audio view and the old cover until
                 // the new file's tracks and tags replace them, instead of blanking the view in between.
                 let continuing_audio =
@@ -584,15 +633,28 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                     show_audio_format(player, &info);
                 }
             }
-            Event::EndFile { reason } => {
+            Event::EndFile { reason, error } => {
+                let path = state.path.lock().map(|path| path.clone()).unwrap_or_default();
+                match error {
+                    Some(error) => warn!("file ended ({}): {error}: {path}", end_reason(reason)),
+                    None => info!("file ended ({}): {path}", end_reason(reason)),
+                }
                 if reason == mpv::END_FILE_REASON_ERROR {
-                    let path = state.path.lock().map(|path| path.clone()).unwrap_or_default();
                     opener::load_failed(&path, playlist::has_next());
                     read_in_background(mpv, app, &state.playlist_refresh, playlist::read, playlist::apply);
                 }
             }
             Event::PlaybackRestart => {
                 if player.get_phase() == Phase::Opening {
+                    let opened = state.open_started.lock().ok().and_then(|started| *started);
+                    match opened {
+                        Some((at, downloaded)) => info!(
+                            "playing after {} ms, {} KiB downloaded while opening",
+                            at.elapsed().as_millis(),
+                            http_cache::downloaded_bytes().saturating_sub(downloaded) / 1024
+                        ),
+                        None => info!("playing"),
+                    }
                     // Without pre-read info the audio view switches to mpv's now that the file plays.
                     let current = state.path.lock().map(|path| path.clone()).unwrap_or_default();
                     let pre_read = state.pre_read_path.lock().is_ok_and(|shown| *shown == current);
@@ -607,22 +669,47 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                     }
                     opener::playback_restarted();
                 } else if player.get_phase() == Phase::Playing {
+                    debug!("playback restarted at {:.1} s", player.get_position());
                     resume::save_soon();
                 }
                 advance_capture(mpv, app, state);
             }
-            Event::CommandFailed(message) => eprintln!("mpv command failed: {message}"),
+            Event::CommandFailed(message) => warn!("mpv command failed: {message}"),
+            Event::Log { prefix, level, text } => log_mpv_message(&format!("mpv/{prefix}"), &level, &text),
             Event::CommandDone { id: recorder::DUMP_COMMAND_ID, error } => {
+                debug!("recording part written{}", error.as_deref().map(|error| format!(", failed: {error}")).unwrap_or_default());
                 if let Ok(mut results) = state.dump_results.lock() {
                     results.push(error);
                 }
             }
             Event::Shutdown => {
+                info!("mpv shut down");
                 let _ = slint::quit_event_loop();
             }
             _ => {}
         }
     }
+}
+
+fn end_reason(reason: i32) -> &'static str {
+    match reason {
+        0 => "reached the end",
+        2 => "stopped",
+        3 => "quit",
+        mpv::END_FILE_REASON_ERROR => "error",
+        5 => "redirect",
+        _ => "unknown reason",
+    }
+}
+
+fn log_mpv_message(target: &str, level: &str, text: &str) {
+    let level = match level {
+        "fatal" | "error" => logging::Level::Error,
+        "warn" => logging::Level::Warn,
+        "info" => logging::Level::Info,
+        _ => logging::Level::Debug,
+    };
+    logging::write_target(level, target, format_args!("{text}"));
 }
 
 // mpv property reads wait on its core, which stalls video drawing when done on the UI thread.
@@ -740,6 +827,13 @@ fn apply_tracks(player: &Player, tracks: TrackLists) {
     // mpv empties the list while switching files. That says nothing about the new file, and must not end the
     // audio view that stays up between two audio files.
     let known = tracks.has_video || !tracks.audio.is_empty();
+    debug!(
+        "tracks: video {}, cover {}, {} audio, {} subtitles",
+        tracks.has_video,
+        tracks.has_cover,
+        tracks.audio.len(),
+        tracks.subtitles.len()
+    );
     player.set_tracks_known(known);
     if known {
         player.set_audio_only(!tracks.has_video);
@@ -1110,7 +1204,7 @@ fn capture_shown_frame(video: &VideoLayer, window: (i32, i32), area: Area, state
         let reached = (area.width, area.height) == wanted;
         if reached || attempts >= capture::RESIZE_ATTEMPTS {
             if !reached {
-                eprintln!("the video area stayed {}x{} instead of {}x{}", area.width, area.height, wanted.0, wanted.1);
+                warn!("the video area stayed {}x{} instead of {}x{}", area.width, area.height, wanted.0, wanted.1);
             }
             capture.stage = capture::Stage::Settling(0);
         } else {
@@ -1133,10 +1227,14 @@ fn capture_shown_frame(video: &VideoLayer, window: (i32, i32), area: Area, state
     }
     match video.read_shown_video(window, area) {
         Some((width, height, pixels)) => match capture::save_png(&capture.path, width, height, &pixels) {
-            Ok(()) => eprintln!("captured {width}x{height} to {}", capture.path.display()),
-            Err(err) => eprintln!("could not save the capture: {err}"),
+            // Printed as well, since capture runs are read from the terminal.
+            Ok(()) => {
+                info!("captured {width}x{height} to {}", capture.path.display());
+                eprintln!("captured {width}x{height} to {}", capture.path.display());
+            }
+            Err(err) => error!("could not save the capture: {err}"),
         },
-        None => eprintln!("no video frame to capture"),
+        None => error!("no video frame to capture"),
     }
     capture.stage = capture::Stage::Done;
     let _ = slint::quit_event_loop();
@@ -1157,17 +1255,18 @@ fn attach_video(
     app.window().set_rendering_notifier(move |state, graphics_api| match state {
         RenderingState::RenderingSetup => {
             let GraphicsAPI::NativeOpenGL { get_proc_address } = graphics_api else {
-                eprintln!("video playback needs an OpenGL renderer");
+                error!("video playback needs an OpenGL renderer");
                 return;
             };
             let redraw_weak = app_weak.clone();
             match VideoLayer::new(&mpv, renderer, *get_proc_address, move || schedule_video_redraw(&redraw_weak)) {
                 Ok(layer) => video = Some(layer),
                 Err(err) => {
-                    eprintln!("{err}");
+                    error!("could not set up video: {err}");
                     return;
                 }
             }
+            info!("video layer ready");
             loader.render_ready(&mpv);
             let shadow_weak = app_weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
@@ -1227,7 +1326,10 @@ fn attach_video(
                 }
             }
         }
-        RenderingState::RenderingTeardown => video = None,
+        RenderingState::RenderingTeardown => {
+            info!("rendering torn down");
+            video = None;
+        }
         _ => {}
     })
 }
@@ -1485,6 +1587,7 @@ fn set_volume(mpv: &Mpv, player: &Player, osd: &Osd, level: f32) {
 fn toggle_fullscreen(app: &AppWindow) {
     let controls = app.global::<WindowControls>();
     let fullscreen = !controls.get_fullscreen();
+    debug!("fullscreen {}", if fullscreen { "on" } else { "off" });
     app.window().set_fullscreen(fullscreen);
     controls.set_fullscreen(fullscreen);
     controls.invoke_activity();
@@ -1574,12 +1677,14 @@ fn wire_window_controls(app: &AppWindow, osd: &Osd, config: &SharedConfig, saved
             return;
         }
         let window = app.window();
+        debug!("maximized {}", if window.is_maximized() { "off" } else { "on" });
         window.set_maximized(!window.is_maximized());
     });
 
     let (app_weak, close_config, close_state) = (app.as_weak(), config.clone(), saved_state.clone());
     controls.on_close(move || {
         if let Some(app) = app_weak.upgrade() {
+            info!("closing the window");
             resume::save_now();
             volume::save_pending();
             if close_config.borrow().remember_window {
@@ -1596,6 +1701,7 @@ fn wire_window_controls(app: &AppWindow, osd: &Osd, config: &SharedConfig, saved
         controls.set_maximized(app.window().is_maximized());
         let fullscreen = app.window().is_fullscreen();
         if controls.get_fullscreen() != fullscreen {
+            debug!("the window {} fullscreen on its own", if fullscreen { "entered" } else { "left" });
             controls.set_fullscreen(fullscreen);
             controls.invoke_activity();
         }
@@ -1606,6 +1712,7 @@ fn wire_window_controls(app: &AppWindow, osd: &Osd, config: &SharedConfig, saved
         let Some(app) = app_weak.upgrade() else { return };
         let controls = app.global::<WindowControls>();
         let pinned = !controls.get_pinned();
+        debug!("keep on top {}", if pinned { "on" } else { "off" });
         controls.set_pinned(pinned);
         update_window_level(&app);
         pin_osd.show(if pinned { "Keep on top: on" } else { "Keep on top: off" });
@@ -1675,7 +1782,7 @@ fn subclass_window(app: &AppWindow) {
 
     let Some(hwnd) = window_hwnd(app) else { return };
     if !unsafe { SetWindowSubclass(hwnd, Some(window_messages), 1, 0) }.as_bool() {
-        eprintln!("could not hook the window for fullscreen sizing and cursor hiding");
+        error!("could not hook the window for fullscreen sizing and cursor hiding");
     }
 }
 
@@ -1724,7 +1831,7 @@ const TASKBAR_ICON: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon-256.r
 
 fn window_icon(rgba: &[u8], size: u32) -> Option<slint::winit_030::winit::window::Icon> {
     slint::winit_030::winit::window::Icon::from_rgba(rgba.to_vec(), size, size)
-        .map_err(|err| eprintln!("could not use the window icon: {err}"))
+        .map_err(|err| error!("could not use the window icon: {err}"))
         .ok()
 }
 
@@ -1740,14 +1847,24 @@ fn set_window_icons(app: &AppWindow) {
     });
 }
 
+#[track_caller]
 fn log_window_error(result: Option<Result<(), ExternalError>>) {
     if let Some(Err(err)) = result {
-        eprintln!("{err}");
+        log_failure(&err);
     }
 }
 
+#[track_caller]
 fn log_error(result: Result<(), impl Display>) {
     if let Err(err) = result {
-        eprintln!("{err}");
+        log_failure(&err);
     }
+}
+
+// Named after the caller's file, since every module funnels its errors through here.
+#[track_caller]
+fn log_failure(err: &dyn Display) {
+    let file = std::panic::Location::caller().file();
+    let module = std::path::Path::new(file).file_stem().and_then(|stem| stem.to_str()).unwrap_or(file);
+    logging::write_target(logging::Level::Error, module, format_args!("{err}"));
 }

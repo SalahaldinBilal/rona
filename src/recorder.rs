@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use slint::{ComponentHandle, Model, Timer, TimerMode};
 
+use crate::logging::{debug, info, warn};
 use crate::mpv::{Event, Mpv, PropertyValue};
 use crate::{AppWindow, EventState, Player, Recorder as RecorderUi, format_time, http_cache, log_error};
 
@@ -182,6 +183,14 @@ impl Controller {
             }
         };
 
+        info!(
+            "recording from {:.1} s, {}",
+            player.get_position(),
+            match &output {
+                Output::Copy { extension, .. } => format!("copying to .{extension}"),
+                Output::Encode { settings, .. } => format!("encoding with {} and {}", settings.video_codec, settings.audio_codec),
+            }
+        );
         self.session = Some(Session { start: player.get_position(), output });
         ui.set_recording(true);
         ui.set_elapsed_text("0:00".into());
@@ -195,6 +204,7 @@ impl Controller {
         ui.set_recording(false);
         let Some(Session { start, output, .. }) = self.session.take() else { return };
         let end = app.global::<Player>().get_position();
+        info!("recording stopped at {end:.1} s, {:.1} s long", end - start);
 
         if end - start < 0.5 {
             ui.set_status_text("The recorded part is too short.".into());
@@ -223,11 +233,15 @@ impl Controller {
                 }
                 match start_encoder(&source, start, end, &settings, subtitle, audio, &path) {
                     Ok(job) => {
+                        info!("encoding to {}", job.output.display());
                         self.job = Some(job);
                         ui.set_encoding(true);
                         ui.set_status_text("Encoding 0%".into());
                     }
-                    Err(err) => ui.set_status_text(format!("Could not start encoding: {err}").into()),
+                    Err(err) => {
+                        warn!("could not start encoding: {err}");
+                        ui.set_status_text(format!("Could not start encoding: {err}").into());
+                    }
                 }
             }
         }
@@ -246,6 +260,7 @@ impl Controller {
             ui.set_current_file(file_name(&path).into());
             let (from_text, to_text) = (format!("{from:.3}"), format!("{to:.3}"));
             let path_text = path.to_string_lossy().into_owned();
+            info!("saving part {part} of {}, {from_text} to {to_text} s, to {path_text}", dump.total);
             dump.current = Some(path);
             log_error(self.mpv.command_with_id(DUMP_COMMAND_ID, &["dump-cache", &from_text, &to_text, &path_text]));
             return;
@@ -257,6 +272,10 @@ impl Controller {
             (None, count) => format!("Saved {count} files."),
         };
         let size: u64 = dump.written.iter().map(|path| file_size(path)).sum();
+        match &dump.failed {
+            Some(err) => warn!("saving the recording failed: {err}"),
+            None => info!("recording saved, {} files, {}", dump.written.len(), bytes_text(size)),
+        }
         ui.set_status_text(status.into());
         ui.set_size_text(bytes_text(size).into());
         ui.set_encoding(false);
@@ -362,7 +381,9 @@ fn start_encoder(
         options.push(("vf", scale.as_str()));
     }
 
+    debug!("encoder options {options:?}");
     let encoder = Mpv::with_options(&options).map_err(|err| err.to_string())?;
+    crate::log_error(encoder.request_log_messages("info"));
     encoder
         .add_stream_protocol(http_cache::PROTOCOL, http_cache::open_stream)
         .map_err(|err| err.to_string())?;
@@ -383,7 +404,17 @@ fn start_encoder(
                             let fraction = ((time as f32 - start) / (end - start)).clamp(0.0, 1.0);
                             progress.store(fraction.to_bits(), Ordering::Relaxed);
                         }
-                        Event::EndFile { .. } | Event::Shutdown => finished.store(true, Ordering::Relaxed),
+                        Event::EndFile { error, .. } => {
+                            if let Some(error) = error {
+                                warn!("encoding ended with an error: {error}");
+                            }
+                            finished.store(true, Ordering::Relaxed);
+                        }
+                        Event::Shutdown => finished.store(true, Ordering::Relaxed),
+                        Event::Log { prefix, level, text } => {
+                            crate::log_mpv_message(&format!("encoder/{prefix}"), &level, &text);
+                        }
+                        Event::CommandFailed(message) => warn!("encoder command failed: {message}"),
                         _ => {}
                     }
                 }
@@ -401,6 +432,11 @@ fn finish_encoder(job: EncodeJob, app: slint::Weak<AppWindow>) {
         let EncodeJob { encoder, output, .. } = job;
         drop(encoder);
         let size = file_size(&output);
+        if size > 0 {
+            info!("encoding finished, {} in {}", bytes_text(size), output.display());
+        } else {
+            warn!("encoding produced nothing at {}", output.display());
+        }
         let _ = slint::invoke_from_event_loop(move || {
             let Some(app) = app.upgrade() else { return };
             let ui = app.global::<RecorderUi>();
@@ -510,6 +546,6 @@ fn open_folder(folder: &Path) {
         "xdg-open"
     };
     if let Err(err) = std::process::Command::new(opener).arg(folder).spawn() {
-        eprintln!("could not open {}: {err}", folder.display());
+        warn!("could not open {}: {err}", folder.display());
     }
 }

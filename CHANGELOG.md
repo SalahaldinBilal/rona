@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- Rona keeps a log of what it and mpv do, one file per day, in `%LOCALAPPDATA%\rona\logs` on Windows and `~/.local/state/rona/logs` on Linux. Files older than a week are deleted.
+
+### Fixed
+- Subtitles stay on the picture while the playlist or recorder panel is open, instead of moving down into the black bars that the narrower video area adds.
+
 ## [0.1.3] - 2026-11-20
 
 ### Changed

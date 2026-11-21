@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use slint::{ComponentHandle, Timer, TimerMode};
 
+use crate::logging::{debug, info, warn};
 use crate::media;
 use crate::mpv::Mpv;
 use crate::settings::{self, SharedConfig};
@@ -101,6 +102,7 @@ pub fn wire(app: &AppWindow, mpv: &Mpv, config: &SharedConfig) {
     let mut entries = file.as_ref().map(|file| load_entries(file)).unwrap_or_default();
     let before = entries.len();
     forget_old(&mut entries, max_age(config));
+    info!("{} resume positions, {} expired", entries.len(), before - entries.len());
     if let Some(file) = file.as_ref().filter(|_| entries.len() != before) {
         write_entries(file, &entries);
     }
@@ -140,11 +142,13 @@ fn restored(name: &str) -> bool {
 
 /// mpv waits until the hook is continued, so this always continues it, even when resume is off.
 pub fn handle_hook(mpv: &Mpv, kind: u64, id: u64) {
+    let started = std::time::Instant::now();
     with_resume(|resume| match kind {
         HOOK_LOAD => resume.file_loading(),
         HOOK_UNLOAD => resume.save_now(),
         _ => {}
     });
+    debug!("hook handled in {} ms", started.elapsed().as_millis());
     log_error(mpv.continue_hook(id));
 }
 
@@ -172,6 +176,10 @@ impl Resume {
             .iter()
             .find(|entry| entry.key == key && policy.covers(entry.audio || media::is_audio_name(&key)))
             .map(|entry| entry.options.clone());
+        match &saved {
+            Some(options) => info!("restoring {} saved options for {key}", options.len()),
+            None => debug!("nothing saved for {key}"),
+        }
         let unhide = self.config.borrow().unhide_subtitles;
         if unhide {
             log_error(self.mpv.set_property("sub-visibility", "yes"));
@@ -294,6 +302,10 @@ fn record_and_write(store: &Mutex<Store>, snapshot: Option<Snapshot>, policy: Po
         options.insert(0, ("start".to_string(), format!("{start:.3}")));
     }
 
+    match resume_position(&snapshot) {
+        Some(start) => debug!("saving {} at {start:.1} s with {} options", snapshot.key, options.len()),
+        None => debug!("saving {} without a position, {} options", snapshot.key, options.len()),
+    }
     if let Some(index) = previous {
         store.entries.remove(index);
     }
@@ -335,7 +347,7 @@ fn load_entries(file: &PathBuf) -> Vec<Entry> {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
         Err(err) => {
-            eprintln!("could not read {}: {err}", file.display());
+            warn!("could not read {}: {err}", file.display());
             return Vec::new();
         }
     };
@@ -386,7 +398,7 @@ fn write_entries(file: &PathBuf, entries: &[Entry]) {
         .and_then(|()| std::fs::write(&temporary, text))
         .and_then(|()| std::fs::rename(&temporary, file));
     if let Err(err) = result {
-        eprintln!("could not save resume positions to {}: {err}", file.display());
+        warn!("could not save resume positions to {}: {err}", file.display());
     }
 }
 

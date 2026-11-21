@@ -9,11 +9,12 @@ use slint::winit_030::winit::event::WindowEvent;
 use slint::{ComponentHandle, SharedString, Timer, TimerMode};
 
 use crate::http_cache::{self, ConnectionState};
+use crate::logging::{debug, info, warn};
 use crate::media::{self, FileCheck, LinkCheck};
 use crate::mpv::Mpv;
 use crate::{AppWindow, DragState, FailureKind, Osd, Panels, Phase, Player, forget_audio_view, log_error, playlist};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Source {
     File(PathBuf),
     Link(String),
@@ -46,7 +47,7 @@ fn check_sources(sources: Vec<Source>) -> Vec<Checked> {
             .into_iter()
             .map(|source| match source {
                 Source::Link(url) if !media::link_has_media_extension(&url) => Pending::Checking(scope.spawn(move || {
-                    let result = media::check_link(&url);
+                    let result = timed_link_check(&url);
                     Checked::Link(url, result)
                 })),
                 source => Pending::Ready(source),
@@ -57,6 +58,9 @@ fn check_sources(sources: Vec<Source>) -> Vec<Checked> {
             .map(|pending| match pending {
                 Pending::Ready(Source::File(path)) => {
                     let check = media::check_file(&path);
+                    if !matches!(check, FileCheck::Playable) {
+                        info!("{}: {}", path.display(), file_check_text(&check));
+                    }
                     Checked::File(path, check)
                 }
                 Pending::Ready(Source::Link(url)) => Checked::Link(url, LinkCheck::Playable),
@@ -64,6 +68,28 @@ fn check_sources(sources: Vec<Source>) -> Vec<Checked> {
             })
             .collect()
     })
+}
+
+fn timed_link_check(url: &str) -> LinkCheck {
+    info!("checking {url}");
+    let started = std::time::Instant::now();
+    let result = media::check_link(url);
+    let outcome = match &result {
+        LinkCheck::Playable => "playable".to_string(),
+        LinkCheck::NotPlayable(detail) => format!("not playable: {detail}"),
+        LinkCheck::Failed(detail) => format!("failed: {detail}"),
+    };
+    info!("link check took {} ms, {outcome}", started.elapsed().as_millis());
+    result
+}
+
+fn file_check_text(check: &FileCheck) -> String {
+    match check {
+        FileCheck::Playable => "playable".into(),
+        FileCheck::NotFound => "not found".into(),
+        FileCheck::Unreadable(reason) => format!("unreadable: {reason}"),
+        FileCheck::NotMedia => "not a video or audio file".into(),
+    }
 }
 
 static FAILED: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -94,6 +120,9 @@ impl Loader {
             state.ready = true;
             std::mem::take(&mut state.pending)
         };
+        if !pending.is_empty() {
+            debug!("video is ready, loading what was waiting for it");
+        }
         send_loadfile(mpv, &pending);
     }
 
@@ -103,12 +132,16 @@ impl Loader {
             drop(state);
             send_loadfile(mpv, &paths);
         } else {
+            debug!("holding {} files until video is ready", paths.len());
             state.pending = paths;
         }
     }
 }
 
 fn send_loadfile(mpv: &Mpv, paths: &[String]) {
+    if !paths.is_empty() {
+        info!("loading {} files, first {}", paths.len(), paths[0]);
+    }
     for (index, path) in paths.iter().enumerate() {
         log_error(mpv.command(&["loadfile", path, if index == 0 { "replace" } else { "append" }]));
     }
@@ -188,6 +221,7 @@ thread_local! {
 }
 
 pub fn queue_arguments(arguments: Vec<String>) {
+    debug!("queued arguments {arguments:?}");
     QUEUED_ARGUMENTS.with(|queued| queued.borrow_mut().extend(arguments));
     ARGUMENT_TIMER.with(|timer| {
         timer.start(TimerMode::SingleShot, ARGUMENT_BURST, || {
@@ -211,6 +245,7 @@ pub fn open_arguments(arguments: &[String]) {
             match media::parse_link(argument) {
                 Ok(url) => sources.push(Source::Link(url)),
                 Err(err) => {
+                    info!("skipping argument {argument}: {}", err.message());
                     skipped += 1;
                     bad_link.get_or_insert_with(|| (argument.clone(), err.message().to_string()));
                 }
@@ -251,6 +286,7 @@ impl Opener {
         }
         self.generation += 1;
         let generation = self.generation;
+        info!("open request {generation}: {sources:?}{}", if quiet { ", quiet" } else { "" });
         self.last_request = sources.clone();
         if let [Source::Link(url)] = sources.as_slice() {
             self.show_skipped(skipped, quiet);
@@ -278,9 +314,11 @@ impl Opener {
 
     fn sources_checked(&mut self, generation: u64, checks: Vec<Checked>, quiet: bool, skipped: usize) {
         if generation != self.generation {
+            debug!("dropping the checks of open request {generation}, a newer one replaced it");
             return;
         }
         let playable: Vec<Source> = checks.iter().filter_map(Checked::playable).collect();
+        debug!("open request {generation}: {} of {} playable", playable.len(), checks.len());
         if !playable.is_empty() {
             self.show_skipped(skipped + checks.len() - playable.len(), quiet);
             self.load(&playable);
@@ -337,7 +375,7 @@ impl Opener {
     fn check_link(&mut self, url: String, generation: u64) {
         self.show_checking(&url);
         std::thread::spawn(move || {
-            let result = media::check_link(&url);
+            let result = timed_link_check(&url);
             let _ = slint::invoke_from_event_loop(move || {
                 with_opener(|opener| opener.link_checked(generation, url, result));
             });
@@ -346,6 +384,7 @@ impl Opener {
 
     fn link_checked(&mut self, generation: u64, url: String, result: LinkCheck) {
         if generation != self.generation {
+            debug!("dropping the link check of open request {generation}, a newer one replaced it");
             return;
         }
         match result {
@@ -372,6 +411,7 @@ impl Opener {
     fn fail(&self, kind: FailureKind, title: &str, detail: &str, window_title: &str, is_link: bool) {
         let Some(app) = self.app.upgrade() else { return };
         let player = app.global::<Player>();
+        warn!("{title}: {detail} ({window_title}), while {:?}", player.get_phase());
         match player.get_phase() {
             Phase::Playing => {
                 self.osd.show(format!("{title} · {}", detail.trim_end_matches('.')));
@@ -387,6 +427,11 @@ impl Opener {
         lock(&FAILED).push(path.to_string());
         let info = media::describe_source(path);
         let open_error = if info.is_link { http_cache::take_open_error() } else { None };
+        warn!(
+            "mpv couldn't play {path}{}{}",
+            open_error.as_deref().map(|error| format!(": {error}")).unwrap_or_default(),
+            if has_next { ", moving on to the next entry" } else { "" }
+        );
         if has_next {
             self.osd.show(format!("Couldn't play {}", info.name));
             return;
@@ -432,13 +477,16 @@ impl Opener {
     fn pick_files(&mut self) {
         // The native dialog blocks its thread, which must not be the UI thread that draws the video.
         std::thread::spawn(|| {
+            debug!("file dialog opened");
             let Some(files) = rfd::FileDialog::new()
                 .add_filter("Video and audio", media::dialog_extensions().as_slice())
                 .add_filter("All files", &["*"])
                 .pick_files()
             else {
+                debug!("file dialog cancelled");
                 return;
             };
+            info!("picked {} files in the dialog", files.len());
             let sources: Vec<Source> = files.into_iter().map(Source::File).collect();
             let _ = slint::invoke_from_event_loop(move || with_opener(|opener| opener.open(sources, false)));
         });
@@ -457,34 +505,52 @@ impl Opener {
     fn open_link(&mut self, text: &str) -> String {
         match media::parse_link(text) {
             Ok(url) => {
+                info!("link box: {url}");
                 if let Some(app) = self.app.upgrade() {
                     app.global::<Panels>().set_link_open(false);
                 }
                 self.open(vec![Source::Link(url)], false);
                 String::new()
             }
-            Err(err) => err.message().to_string(),
+            Err(err) => {
+                debug!("link box refused {text:?}: {}", err.message());
+                err.message().to_string()
+            }
         }
     }
 
     // Files copied in a file manager come as a file list. Text that isn't a link is tried as a file path,
     // and quietly ignored when it isn't a playable file.
     fn paste(&mut self) {
-        let Ok(mut clipboard) = arboard::Clipboard::new() else { return };
+        let mut clipboard = match arboard::Clipboard::new() {
+            Ok(clipboard) => clipboard,
+            Err(err) => {
+                warn!("could not read the clipboard: {err}");
+                return;
+            }
+        };
         if let Ok(files) = clipboard.get().file_list()
             && !files.is_empty()
         {
+            info!("pasted {} files", files.len());
             self.open(files.into_iter().map(Source::File).collect(), false);
             return;
         }
-        let Ok(text) = clipboard.get_text() else { return };
+        let Ok(text) = clipboard.get_text() else {
+            debug!("paste: nothing usable on the clipboard");
+            return;
+        };
         if let Ok(url) = media::parse_link(&text) {
+            info!("pasted a link");
             self.open(vec![Source::Link(url)], false);
             return;
         }
         let text = media::clean_text(&text);
         if !text.is_empty() && !text.contains('\n') {
+            info!("pasted text, trying it as a file path");
             self.open(vec![Source::File(PathBuf::from(text))], true);
+        } else {
+            debug!("paste: the clipboard text is neither a link nor a path");
         }
     }
 
@@ -492,6 +558,7 @@ impl Opener {
         self.generation += 1;
         let Some(app) = self.app.upgrade() else { return };
         let player = app.global::<Player>();
+        info!("loading cancelled while {:?}", player.get_phase());
         match player.get_phase() {
             Phase::Checking => show_idle(&player),
             Phase::Opening => {
@@ -504,6 +571,7 @@ impl Opener {
 
     fn retry(&mut self) {
         let Some(app) = self.app.upgrade() else { return };
+        info!("retry while {:?}", app.global::<Player>().get_phase());
         match app.global::<Player>().get_phase() {
             Phase::Failed => {
                 let request = self.last_request.clone();
@@ -515,6 +583,7 @@ impl Opener {
     }
 
     fn close(&mut self) {
+        info!("closing the file");
         self.generation += 1;
         log_error(self.mpv.command(&["stop"]));
         if let Some(app) = self.app.upgrade() {
@@ -530,11 +599,13 @@ impl Opener {
     // A read blocked on a silent server can't be interrupted, so that case reloads the file where it was.
     fn retry_connection(&mut self) {
         if !matches!(http_cache::connection_state(), ConnectionState::Fine) {
+            info!("retrying the connection now");
             http_cache::retry_now();
             return;
         }
         let Some(app) = self.app.upgrade() else { return };
         let position = app.global::<Player>().get_position();
+        info!("reloading the stalled file at {position:.1} s");
         log_error(self.mpv.command(&["set", "start", &format!("{position:.3}")]));
         log_error(self.mpv.command(&["playlist-play-index", "current"]));
         self.restore_start = true;
@@ -603,6 +674,7 @@ pub fn drop_handler(app: &AppWindow) -> impl FnMut(&WindowEvent) + 'static {
                     let dropped = dropped.clone();
                     Timer::single_shot(Duration::ZERO, move || {
                         let paths = std::mem::take(&mut *dropped.borrow_mut());
+                        info!("dropped {} files", paths.len());
                         let sources = paths.into_iter().map(Source::File).collect();
                         with_opener(|opener| opener.open(sources, true));
                     });

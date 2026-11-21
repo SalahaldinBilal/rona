@@ -5,7 +5,7 @@ use crate::mpv::Mpv;
 use crate::settings::SharedConfig;
 use crate::{AppWindow, Player, Recorder, WindowControls, log_error};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     PlayPause,
     SeekBack,
@@ -185,6 +185,7 @@ pub fn handle(text: &str, shift: bool, mpv: &Mpv, app: &AppWindow, config: &Shar
         (Action::ALL[index], step)
     };
 
+    crate::logging::debug!("key {pressed:?}{} -> {action:?}", if shift { " with shift" } else { "" });
     let player = app.global::<Player>();
     let controls = app.global::<WindowControls>();
     match action {

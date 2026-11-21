@@ -317,6 +317,12 @@ pub fn check_link(url: &str) -> LinkCheck {
         Err(err) => return LinkCheck::Failed(http_cache::network_error_text(&err, &host)),
     };
     let content_type = http_cache::header(&response, "Content-Type").map(str::to_string);
+    crate::logging::debug!(
+        "link check reply: {}, type {}, from {}",
+        response.status().as_u16(),
+        content_type.as_deref().unwrap_or("none"),
+        response.get_uri()
+    );
     if let Some(kind) = content_type.as_deref().and_then(content_type_rejection) {
         return LinkCheck::NotPlayable(format!("{host} sent {kind}"));
     }

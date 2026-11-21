@@ -80,6 +80,7 @@ pub fn save_pending() {
 
 impl Volume {
     fn use_level(&self, audio: bool) {
+        crate::logging::debug!("using the {} volume", if audio { "audio" } else { "video" });
         self.audio.set(audio);
         self.apply();
     }

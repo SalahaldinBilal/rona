@@ -39,8 +39,14 @@ impl ChapterSkip {
         self.checked.extend(index..resume_at.unwrap_or(chapters.row_count()));
         match resume_at {
             Some(later) if later == index => {}
-            Some(later) => log_error(mpv.command(&["set", "chapter", &later.to_string()])),
-            None => log_error(mpv.command(&["seek", "100", "absolute-percent"])),
+            Some(later) => {
+                crate::logging::info!("skipping chapters {index} to {}", later - 1);
+                log_error(mpv.command(&["set", "chapter", &later.to_string()]));
+            }
+            None => {
+                crate::logging::info!("skipping from chapter {index} to the end");
+                log_error(mpv.command(&["seek", "100", "absolute-percent"]));
+            }
         }
     }
 }

@@ -8,6 +8,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use slint::ComponentHandle;
 
+use crate::logging::{info, warn};
 use crate::settings::SharedConfig;
 use crate::{AppWindow, Phase, Player, UpdatePhase, Updates, WindowControls};
 
@@ -87,8 +88,9 @@ pub fn wire(app: &AppWindow, config: &SharedConfig) {
 /// Runs after the event loop ends. Starts the installer on Windows, swaps the AppImage on Linux.
 pub fn finish_pending_install() {
     let Some(path) = PENDING_INSTALL.lock().unwrap_or_else(|err| err.into_inner()).take() else { return };
+    info!("installing the update from {}", path.display());
     if let Err(err) = hand_off(path) {
-        eprintln!("could not install the update: {err}");
+        crate::logging::error!("could not install the update: {err}");
     }
 }
 
@@ -128,7 +130,13 @@ fn check(app: &AppWindow, announce: bool) {
     updates.set_error("".into());
     let app_weak = app.as_weak();
     std::thread::spawn(move || {
+        info!("checking {} for updates", endpoint());
         let result = fetch_release(&endpoint());
+        match &result {
+            Ok(Some(release)) => info!("update {} available", release.version),
+            Ok(None) => info!("up to date"),
+            Err(err) => warn!("update check failed: {err}"),
+        }
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(app) = app_weak.upgrade() {
                 show_check_result(&app, result, announce);
@@ -222,6 +230,7 @@ fn download(app: &AppWindow) {
 
     let app_weak = app.as_weak();
     std::thread::spawn(move || {
+        info!("downloading update {} from {}", release.version, release.download.url);
         let progress_weak = app_weak.clone();
         let result = download_verified(&release, PUBLIC_KEY, move |fraction| {
             let app_weak = progress_weak.clone();
@@ -236,10 +245,12 @@ fn download(app: &AppWindow) {
             let updates = app.global::<Updates>();
             match result {
                 Ok(path) => {
+                    info!("update verified and saved to {}", path.display());
                     STATE.with_borrow_mut(|state| state.downloaded = Some(path));
                     updates.set_phase(UpdatePhase::Ready);
                 }
                 Err(err) => {
+                    warn!("update download failed: {err}");
                     updates.set_error(format!("The update couldn't be downloaded. {err}").into());
                     updates.set_phase(UpdatePhase::Failed);
                 }

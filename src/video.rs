@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use glow::HasContext;
 
+use crate::logging::{debug, info};
 use crate::mpv::{Mpv, RenderContext};
 
 const RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(1);
@@ -71,9 +72,10 @@ impl VideoLayer {
                     let render_context = mpv
                         .create_d3d11_render_context(target.device_ptr(), on_update)
                         .map_err(|err| err.to_string())?;
+                    info!("video renders through Direct3D 11");
                     return Ok(layer(gl, Target::Direct3D(target), render_context));
                 }
-                Err(err) => eprintln!("Direct3D 11 video is not available, using OpenGL: {err}"),
+                Err(err) => crate::logging::warn!("Direct3D 11 video is not available, using OpenGL: {err}"),
             }
         }
         // Only Windows has a choice to make, everywhere else it is OpenGL.
@@ -97,6 +99,7 @@ impl VideoLayer {
         let render_context = mpv
             .create_render_context(get_proc_address, on_update)
             .map_err(|err| err.to_string())?;
+        info!("video renders through OpenGL");
         Ok(layer(gl, Target::Renderbuffer(renderbuffer), render_context))
     }
 
@@ -190,6 +193,7 @@ impl VideoLayer {
         if !first_frame && !resize_now && now - since < RESIZE_SETTLE_DELAY {
             return Ok(false);
         }
+        debug!("video buffer {}x{} -> {}x{}", self.size.0, self.size.1, target.0, target.1);
         unsafe { self.resize_target(target) }?;
         self.pending_size = None;
         Ok(true)

@@ -8,6 +8,7 @@ use std::time::Duration;
 use slint::{Color, ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::http_cache::{self, NetworkOptions};
+use crate::logging::{debug, info, warn};
 use crate::mpv::Mpv;
 use crate::shortcuts::{self, Action};
 use crate::video::Renderer;
@@ -481,7 +482,7 @@ pub fn read_file(file_name: impl AsRef<Path>, mut set: impl FnMut(&str, &str)) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
         Err(err) => {
-            eprintln!("could not read {}: {err}", path.display());
+            warn!("could not read {}: {err}", path.display());
             return;
         }
     };
@@ -498,8 +499,9 @@ pub fn write_file(file_name: impl AsRef<Path>, entries: &[(String, String)]) {
     let path = dir.join(file_name);
     let folder = path.parent().unwrap_or(&dir);
     let result = std::fs::create_dir_all(folder).and_then(|()| std::fs::write(&path, text));
-    if let Err(err) = result {
-        eprintln!("could not write {}: {err}", path.display());
+    match result {
+        Ok(()) => debug!("wrote {}", path.display()),
+        Err(err) => warn!("could not write {}: {err}", path.display()),
     }
 }
 
@@ -698,6 +700,16 @@ fn apply(mpv: &Mpv, app: &AppWindow, old: Option<&Config>, new: &Config, default
     update_window_level(app);
 }
 
+fn log_changes(old: &Config, new: &Config) {
+    let old_entries = old.entries();
+    for (name, value) in new.entries() {
+        let before = old_entries.iter().find(|(old_name, _)| *old_name == name).map(|(_, value)| value.as_str());
+        if before != Some(value.as_str()) {
+            info!("setting {name}: {} -> {value}", before.unwrap_or(""));
+        }
+    }
+}
+
 fn lock_devices(devices: &AudioDevices) -> std::sync::MutexGuard<'_, Vec<AudioDevice>> {
     devices.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -749,6 +761,7 @@ pub fn wire(mpv: &Mpv, app: &AppWindow, config: &SharedConfig) {
         if new == old {
             return;
         }
+        log_changes(&old, &new);
         apply(&changed_mpv, &app, Some(&old), &new, &changed_defaults);
         save(&new);
         *changed_config.borrow_mut() = new;
@@ -761,6 +774,8 @@ pub fn wire(mpv: &Mpv, app: &AppWindow, config: &SharedConfig) {
         let old = reset_config.borrow().clone();
         let mut new = old.clone();
         new.reset_page(page);
+        info!("reset settings page {page}");
+        log_changes(&old, &new);
         let mut devices = lock_devices(&reset_devices);
         ensure_audio_device(&mut devices, &new.audio_device);
         write_ui(&app.global::<SettingsUi>(), &new, &devices);
