@@ -11,6 +11,7 @@ mod http_cache;
 mod instance;
 mod logging;
 mod media;
+mod mkv_cut;
 mod mpv;
 mod opener;
 mod playlist;
@@ -87,6 +88,7 @@ const OSD_DIMENSIONS: u64 = 26;
 const CHAPTER: u64 = 27;
 const SUB_VISIBILITY: u64 = 28;
 const VIDEO_OUT_PARAMS: u64 = 30;
+const DEMUXER_START_TIME: u64 = 31;
 
 #[cfg(target_os = "linux")]
 const APP_ID: &str = "rona";
@@ -116,6 +118,8 @@ struct EventState {
     // The file whose pre-read info the audio view shows, so a file without it falls back to mpv's.
     pre_read_path: Mutex<String>,
     file_format: Mutex<String>,
+    // What mpv subtracts from the file's own timestamps to start time-pos at 0.
+    start_time: Mutex<Option<f64>>,
     dump_results: Mutex<Vec<Option<String>>>,
     byte_times: Mutex<buffered::ByteTimeMap>,
     capture: Mutex<Option<Capture>>,
@@ -389,6 +393,7 @@ fn observe_properties(mpv: &Mpv) -> Result<(), mpv::Error> {
     mpv.observe_flag(SEEKING, "seeking")?;
     mpv.observe_string(PATH, "path")?;
     mpv.observe_string(FILE_FORMAT, "file-format")?;
+    mpv.observe_double(DEMUXER_START_TIME, "demuxer-start-time")?;
     mpv.observe_double(VIDEO_BITRATE, "video-bitrate")?;
     mpv.observe_changes(CHAPTER_LIST, "chapter-list")?;
     mpv.observe_double(CHAPTER, "chapter")?;
@@ -601,6 +606,11 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
             Event::PropertyChange { id: FILE_FORMAT, value } => {
                 if let Ok(mut format) = state.file_format.lock() {
                     *format = text(value);
+                }
+            }
+            Event::PropertyChange { id: DEMUXER_START_TIME, value } => {
+                if let Ok(mut start_time) = state.start_time.lock() {
+                    *start_time = number(value);
                 }
             }
             Event::StartFile => {

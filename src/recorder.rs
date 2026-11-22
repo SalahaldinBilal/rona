@@ -9,6 +9,7 @@ use std::time::Duration;
 use slint::{ComponentHandle, Model, SharedString, Timer, TimerMode};
 
 use crate::logging::{debug, info, warn};
+use crate::mkv_cut;
 use crate::mpv::{Event, Mpv, PropertyValue};
 use crate::recorder_window;
 use crate::{AppWindow, EventState, Player, Recorder as RecorderUi, format_time, http_cache, log_error};
@@ -33,8 +34,13 @@ struct Session {
 }
 
 enum Output {
-    Copy { base: PathBuf, extension: String, split: Split },
+    Copy { base: PathBuf, extension: String, split: Split, matroska: Option<Matroska> },
     Encode { source: String, settings: EncodeSettings, subtitle: Option<i32>, audio: Option<i32>, path: PathBuf },
+}
+
+struct Matroska {
+    source: String,
+    start_time: f64,
 }
 
 struct EncodeSettings {
@@ -191,9 +197,18 @@ impl Controller {
                 }
                 _ => Split::Off,
             };
-            log_error(self.mpv.command(&["set", "demuxer-max-back-bytes", RECORDING_BACK_BUFFER]));
+            let matroska = if is_matroska(&format) {
+                let Some(start_time) = self.state.start_time.lock().ok().and_then(|start_time| *start_time) else {
+                    show_status(&app, "mpv didn't report where this file's timeline starts.");
+                    return;
+                };
+                Some(Matroska { source: source.clone(), start_time })
+            } else {
+                log_error(self.mpv.command(&["set", "demuxer-max-back-bytes", RECORDING_BACK_BUFFER]));
+                None
+            };
             show_text(&app, file_name(&part_path(&base, &extension, 1, &split)), |ui, text| ui.set_current_file(text));
-            Output::Copy { base, extension, split }
+            Output::Copy { base, extension, split, matroska }
         } else {
             let settings = fields.encode;
             let path = with_extension(&base, settings.extension);
@@ -231,14 +246,17 @@ impl Controller {
 
         if end - start < 0.5 {
             show_status(&app, "The recorded part is too short.");
-            if matches!(output, Output::Copy { .. }) {
+            if matches!(output, Output::Copy { matroska: None, .. }) {
                 log_error(self.mpv.command(&["set", "demuxer-max-back-bytes", DEFAULT_BACK_BUFFER]));
             }
             return;
         }
 
         match output {
-            Output::Copy { base, extension, split } => {
+            Output::Copy { base, extension, split, matroska: Some(matroska) } => {
+                cut_matroska(&app, matroska, start, end, base, extension, split);
+            }
+            Output::Copy { base, extension, split, matroska: None } => {
                 let parts = split_range(start, end, &split)
                     .into_iter()
                     .enumerate()
@@ -288,19 +306,7 @@ impl Controller {
             return;
         }
 
-        let status = match (&dump.failed, dump.written.len()) {
-            (Some(err), _) => format!("Saving failed: {err}"),
-            (None, 1) => "Saved.".to_string(),
-            (None, count) => format!("Saved {count} files."),
-        };
-        let size: u64 = dump.written.iter().map(|path| file_size(path)).sum();
-        match &dump.failed {
-            Some(err) => warn!("saving the recording failed: {err}"),
-            None => info!("recording saved, {} files, {}", dump.written.len(), bytes_text(size)),
-        }
-        show_status(&app, status);
-        show_text(&app, bytes_text(size), |ui, text| ui.set_size_text(text));
-        show(&app, |ui| ui.set_encoding(false));
+        finish_saving(&app, &dump.written, dump.failed.as_deref());
         self.dump = None;
         log_error(self.mpv.command(&["set", "demuxer-max-back-bytes", DEFAULT_BACK_BUFFER]));
     }
@@ -339,6 +345,59 @@ impl Controller {
             }
         }
     }
+}
+
+fn finish_saving(app: &AppWindow, written: &[PathBuf], failed: Option<&str>) {
+    let status = match (failed, written.len()) {
+        (Some(err), _) => format!("Saving failed: {err}"),
+        (None, 1) => "Saved.".to_string(),
+        (None, count) => format!("Saved {count} files."),
+    };
+    let size: u64 = written.iter().map(|path| file_size(path)).sum();
+    match failed {
+        Some(err) => warn!("saving the recording failed: {err}"),
+        None => info!("recording saved, {} files, {}", written.len(), bytes_text(size)),
+    }
+    if let Some(last) = written.last() {
+        show_text(app, file_name(last), |ui, text| ui.set_current_file(text));
+    }
+    show_status(app, status);
+    show_text(app, bytes_text(size), |ui, text| ui.set_size_text(text));
+    show(app, |ui| ui.set_encoding(false));
+}
+
+// Reads the source itself instead of mpv's cache, so it runs off the UI thread.
+fn cut_matroska(app: &AppWindow, matroska: Matroska, start: f32, end: f32, base: PathBuf, extension: String, split: Split) {
+    show(app, |ui| ui.set_encoding(true));
+    show_status(app, "Saving.");
+    let app_weak = app.as_weak();
+    std::thread::spawn(move || {
+        let split_seconds = match split {
+            Split::Seconds(seconds) => Some(seconds as f64),
+            Split::Off => None,
+        };
+        let progress_app = app_weak.clone();
+        let (written, failed) = mkv_cut::cut(
+            &matroska.source,
+            start as f64 + matroska.start_time,
+            end as f64 + matroska.start_time,
+            split_seconds,
+            |part| part_path(&base, &extension, part, &split),
+            |fraction| {
+                let app_weak = progress_app.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(app) = app_weak.upgrade() {
+                        show_status(&app, format!("Saving {:.0}%", fraction * 100.0));
+                    }
+                });
+            },
+        );
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(app) = app_weak.upgrade() {
+                finish_saving(&app, &written, failed.as_deref());
+            }
+        });
+    });
 }
 
 fn split_range(start: f32, end: f32, split: &Split) -> Vec<(f32, f32)> {
@@ -532,6 +591,10 @@ fn encode_settings(ui: &RecorderUi) -> EncodeSettings {
 
 fn selected_track(tracks: &slint::ModelRc<crate::TrackItem>) -> Option<i32> {
     tracks.iter().find(|track| track.selected).map(|track| track.id)
+}
+
+fn is_matroska(format: &str) -> bool {
+    ["mkv", "matroska", "webm"].iter().any(|name| format.contains(name))
 }
 
 fn copy_extension(format: &str) -> &'static str {

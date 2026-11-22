@@ -150,14 +150,16 @@ pub fn retry_now() {
 }
 
 // Waits out a retry delay, or until the user asks.
-fn wait_for_retry(delay: Duration, cancelled: &AtomicBool) -> Result<(), String> {
+fn wait_for_retry(delay: Duration, cancelled: &AtomicBool, playback: bool) -> Result<(), String> {
     let until = clock_ms() + delay.as_millis() as u64;
     loop {
         if cancelled.load(Ordering::Relaxed) {
-            CONNECTION_STATE.store(STATE_FINE, Ordering::Relaxed);
+            if playback {
+                CONNECTION_STATE.store(STATE_FINE, Ordering::Relaxed);
+            }
             return Err("cancelled".into());
         }
-        if RETRY_REQUESTED.swap(false, Ordering::Relaxed) || clock_ms() >= until {
+        if (playback && RETRY_REQUESTED.swap(false, Ordering::Relaxed)) || clock_ms() >= until {
             return Ok(());
         }
         std::thread::sleep(RETRY_POLL);
@@ -216,6 +218,37 @@ pub fn cached_byte_ranges(source: &str) -> Vec<(u64, u64)> {
         }
     }
     ranges
+}
+
+/// Random access to a link for a recording: cached chunks come from memory, missing ones are downloaded.
+pub struct LinkReader {
+    stream: HttpStream,
+    cancelled: AtomicBool,
+}
+
+impl LinkReader {
+    // Uses the player's cache while the link is still the one playing, and a cache of its own otherwise.
+    pub fn open(source: &str) -> Result<Self, String> {
+        let url = source
+            .strip_prefix(PROTOCOL)
+            .and_then(|rest| rest.strip_prefix("://"))
+            .ok_or_else(|| format!("{source} is not a link"))?;
+        let id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
+        info!("stream #{id}: opening {url} for a recording");
+        let shared = cache_of(source);
+        let stream = HttpStream::open(id, url, false, || shared.unwrap_or_default())
+            .map_err(|err| network_error_text(&err, &crate::media::link_host(url)))?;
+        Ok(Self { stream, cancelled: AtomicBool::new(false) })
+    }
+
+    pub fn size(&self) -> Option<u64> {
+        self.stream.size
+    }
+
+    pub fn read_at(&mut self, position: u64, buffer: &mut [u8]) -> Result<usize, String> {
+        self.stream.position = position;
+        self.stream.read(buffer, &self.cancelled)
+    }
 }
 
 fn cache_of(source: &str) -> Option<Arc<Mutex<ByteCache>>> {
@@ -304,14 +337,18 @@ struct HttpStream {
     size: Option<u64>,
     supports_ranges: bool,
     connection: Option<Connection>,
+    // Only mpv's own stream moves the read head and the connection banner, not a recording reading the same link.
+    playback: bool,
 }
 
 impl HttpStream {
-    fn open(id: u64, url: &str) -> Result<Self, ureq::Error> {
+    fn open(
+        id: u64,
+        url: &str,
+        playback: bool,
+        cache: impl FnOnce() -> Arc<Mutex<ByteCache>>,
+    ) -> Result<Self, ureq::Error> {
         let agent = agent();
-        CONNECTION_STATE.store(STATE_FINE, Ordering::Relaxed);
-        RETRY_REQUESTED.store(false, Ordering::Relaxed);
-        note_progress();
         let started = Instant::now();
         let response = range_request(&agent, url, 0)?;
         let (supports_ranges, size) = if response.status().as_u16() == 206 {
@@ -327,7 +364,7 @@ impl HttpStream {
             size.map_or("unknown".to_string(), |size| format!("{} MiB", size / CHUNK_SIZE)),
             if supports_ranges { "supported" } else { "not supported" }
         );
-        let cache = cache_for(url);
+        let cache = cache();
         lock(&cache).size = size;
         Ok(Self {
             id,
@@ -340,6 +377,7 @@ impl HttpStream {
             size,
             supports_ranges,
             connection: Some(Connection::new(response, 0)),
+            playback,
         })
     }
 
@@ -361,7 +399,9 @@ impl HttpStream {
         let count = buffer.len().min(chunk.len() - offset);
         buffer[..count].copy_from_slice(&chunk[offset..offset + count]);
         self.position += count as u64;
-        lock(&self.cache).read_head = self.position;
+        if self.playback {
+            lock(&self.cache).read_head = self.position;
+        }
         Ok(count)
     }
 
@@ -372,19 +412,25 @@ impl HttpStream {
         let mut attempt = 0;
         loop {
             if let Some(delay) = delay {
-                RETRY_AT.store(clock_ms() + delay.as_millis() as u64, Ordering::Relaxed);
-                CONNECTION_STATE.store(STATE_RETRYING, Ordering::Relaxed);
-                wait_for_retry(delay, cancelled)?;
+                if self.playback {
+                    RETRY_AT.store(clock_ms() + delay.as_millis() as u64, Ordering::Relaxed);
+                    CONNECTION_STATE.store(STATE_RETRYING, Ordering::Relaxed);
+                }
+                wait_for_retry(delay, cancelled, self.playback)?;
             }
             self.connection = None;
             match self.chunk(index, cancelled) {
                 Ok(chunk) => {
                     info!("stream #{}: reconnected", self.id);
-                    CONNECTION_STATE.store(STATE_FINE, Ordering::Relaxed);
+                    if self.playback {
+                        CONNECTION_STATE.store(STATE_FINE, Ordering::Relaxed);
+                    }
                     return Ok(chunk);
                 }
                 Err(err) if cancelled.load(Ordering::Relaxed) => {
-                    CONNECTION_STATE.store(STATE_FINE, Ordering::Relaxed);
+                    if self.playback {
+                        CONNECTION_STATE.store(STATE_FINE, Ordering::Relaxed);
+                    }
                     return Err(err);
                 }
                 Err(err) => {
@@ -518,7 +564,10 @@ pub unsafe extern "C" fn open_stream(_user_data: *mut c_void, uri: *mut c_char, 
     };
     let id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
     info!("stream #{id}: opening {url}");
-    match HttpStream::open(id, url) {
+    CONNECTION_STATE.store(STATE_FINE, Ordering::Relaxed);
+    RETRY_REQUESTED.store(false, Ordering::Relaxed);
+    note_progress();
+    match HttpStream::open(id, url, true, || cache_for(url)) {
         Ok(stream) => {
             let cookie = Box::new(Cookie { id, cancelled: AtomicBool::new(false), stream: Mutex::new(stream) });
             let info = unsafe { &mut *(info as *mut StreamInfo) };
