@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-11-23
+- Seek is now exact with an option for keyframe seek.
+
 ## [0.1.5] - 2026-11-22
 
 ### Fixed
