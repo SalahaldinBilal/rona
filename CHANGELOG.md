@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-22
+
 ### Fixed
 - Copy mode recordings of MKV and WebM files had blocky patches all over the picture, because mpv's recorder dropped frames from them. Rona now cuts these files itself. Subtitle fonts are kept, and a subtitle line that's already showing when you press Start is in the recording too. Chapters and tags aren't copied. The recorder shows a percentage while saving.
 
