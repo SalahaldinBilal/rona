@@ -46,6 +46,7 @@ pub struct Config {
     pub end_action: usize,
     pub seek_short: f64,
     pub seek_long: f64,
+    pub seek_keyframes: bool,
     pub speeds: Vec<f32>,
     pub skip_chapters: bool,
     pub skip_chapter_titles: String,
@@ -102,6 +103,7 @@ impl Default for Config {
             end_action: 1,
             seek_short: 5.0,
             seek_long: 60.0,
+            seek_keyframes: false,
             speeds: DEFAULT_SPEEDS.to_vec(),
             skip_chapters: false,
             skip_chapter_titles: String::new(),
@@ -191,6 +193,7 @@ impl Config {
                 self.end_action = defaults.end_action;
                 self.seek_short = defaults.seek_short;
                 self.seek_long = defaults.seek_long;
+                self.seek_keyframes = defaults.seek_keyframes;
                 self.speeds = defaults.speeds;
                 self.skip_chapters = defaults.skip_chapters;
                 self.skip_chapter_titles = defaults.skip_chapter_titles;
@@ -283,6 +286,7 @@ impl Config {
             ("end-action", END_ACTIONS[self.end_action].into()),
             ("seek-short", self.seek_short.to_string()),
             ("seek-long", self.seek_long.to_string()),
+            ("seek-keyframes", yes_no(self.seek_keyframes)),
             ("speeds", speeds_text(&self.speeds)),
             ("skip-chapters", yes_no(self.skip_chapters)),
             ("skip-chapter-titles", self.skip_chapter_titles.clone()),
@@ -337,6 +341,7 @@ impl Config {
             "end-action" => set_choice(&mut self.end_action, value, &END_ACTIONS),
             "seek-short" => set_number(&mut self.seek_short, value, is_positive),
             "seek-long" => set_number(&mut self.seek_long, value, is_positive),
+            "seek-keyframes" => set_flag(&mut self.seek_keyframes, value),
             "speeds" => {
                 if let Some(speeds) = parse_speeds(value) {
                     self.speeds = speeds;
@@ -592,6 +597,7 @@ fn write_ui(ui: &SettingsUi, config: &Config, devices: &[AudioDevice]) {
     ui.set_end_action(config.end_action as i32);
     ui.set_seek_short(config.seek_short.to_string().into());
     ui.set_seek_long(config.seek_long.to_string().into());
+    ui.set_seek_keyframes(config.seek_keyframes);
     ui.set_speed_steps(speeds_text(&config.speeds).into());
     ui.set_skip_chapters(config.skip_chapters);
     ui.set_skip_chapter_titles(config.skip_chapter_titles.as_str().into());
@@ -646,6 +652,7 @@ fn read_ui(ui: &SettingsUi, config: &mut Config, devices: &[AudioDevice]) {
     config.end_action = index(ui.get_end_action(), END_ACTIONS.len());
     set_number(&mut config.seek_short, &ui.get_seek_short(), is_positive);
     set_number(&mut config.seek_long, &ui.get_seek_long(), is_positive);
+    config.seek_keyframes = ui.get_seek_keyframes();
     if let Some(speeds) = parse_speeds(&ui.get_speed_steps()) {
         config.speeds = speeds;
     }

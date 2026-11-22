@@ -147,6 +147,16 @@ component PlaybackPage inherits Page {
         Rectangle { horizontal-stretch: 1; }
     }
 
+    Checkbox {
+        text: "Seek to keyframes";
+        checked <=> Settings.seek-keyframes;
+        toggled => { Settings.changed(); }
+    }
+
+    InfoText {
+        text: "Faster, but jumps land on the nearest keyframe instead of the exact time.";
+    }
+
     LabeledRow {
         label: "Speed steps";
 

@@ -176,13 +176,14 @@ pub fn key_from_name(name: &str) -> Option<String> {
 
 pub fn handle(text: &str, shift: bool, mpv: &Mpv, app: &AppWindow, config: &SharedConfig) -> bool {
     let pressed = normalize(text);
-    let (action, seek_step) = {
+    let (action, seek_step, seek_mode) = {
         let config = config.borrow();
         let Some(index) = config.shortcuts.iter().position(|key| !key.is_empty() && *key == pressed) else {
             return false;
         };
         let step = if shift { config.seek_long } else { config.seek_short };
-        (Action::ALL[index], step)
+        let mode = if config.seek_keyframes { "relative+keyframes" } else { "relative+exact" };
+        (Action::ALL[index], step, mode)
     };
 
     crate::logging::debug!("key {pressed:?}{} -> {action:?}", if shift { " with shift" } else { "" });
@@ -190,8 +191,8 @@ pub fn handle(text: &str, shift: bool, mpv: &Mpv, app: &AppWindow, config: &Shar
     let controls = app.global::<WindowControls>();
     match action {
         Action::PlayPause => player.invoke_toggle_pause(),
-        Action::SeekBack => log_error(mpv.command(&["seek", &(-seek_step).to_string(), "relative"])),
-        Action::SeekForward => log_error(mpv.command(&["seek", &seek_step.to_string(), "relative"])),
+        Action::SeekBack => log_error(mpv.command(&["seek", &(-seek_step).to_string(), seek_mode])),
+        Action::SeekForward => log_error(mpv.command(&["seek", &seek_step.to_string(), seek_mode])),
         Action::VolumeUp => player.invoke_change_volume(0.05),
         Action::VolumeDown => player.invoke_change_volume(-0.05),
         Action::Mute => player.invoke_toggle_mute(),
