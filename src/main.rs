@@ -6,6 +6,7 @@ mod buffered;
 mod capture;
 mod chapter_skip;
 mod color;
+mod encoders;
 mod extensions;
 mod http_cache;
 mod instance;

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+- Re-encoded recordings have a rate control choice: Variable (the default), Average, Constant or Constrained. Variable and Constrained take a quality, High, Medium, Low or a custom CRF. Opus audio follows the choice. AAC keeps its fixed bitrate.
+- Re-encoding can use the GPU's encoder (NVIDIA, AMD or Intel). The Encoder list shows the ones that work on your machine. AMD can't do Constrained.
+
+### Changed
+- Re-encoding runs while you record instead of after Stop, so the file is ready right after. Seeking back during a recording makes it encode the range again at Stop. Turn off "Encode during playback" to encode after Stop.
+- The recorder opens in re-encode mode.
+
 ## [0.1.6] - 2026-11-23
 - Seek is now exact with an option for keyframe seek.
 

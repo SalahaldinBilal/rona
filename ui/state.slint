@@ -107,17 +107,24 @@ export global Panels {
 export global Recorder {
     in-out property <string> folder;
     in-out property <string> prefix;
-    in-out property <int> mode;
+    in-out property <int> mode: 1;
     in-out property <int> split-mode;
     in-out property <string> split-minutes: "60";
     in-out property <string> split-megabytes: "500";
     in-out property <int> container;
     in-out property <int> video-codec;
+    // Software, then the hardware encoders that worked on this machine.
+    in property <[string]> encoders: ["Software"];
+    in-out property <int> encoder;
+    in-out property <int> rate-control;
+    in-out property <int> quality: 1;
+    in-out property <string> crf: "23";
     in-out property <string> video-bitrate;
     in-out property <int> size;
     in-out property <int> audio-codec;
     in-out property <int> audio-bitrate: 1;
     in-out property <bool> burn-subtitles;
+    in-out property <bool> encode-live: true;
 
     in property <bool> recording;
     in property <bool> encoding;

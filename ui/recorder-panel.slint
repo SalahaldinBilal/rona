@@ -213,7 +213,9 @@ export component RecorderPanel inherits Rectangle {
                     spacing: 10px;
 
                     InfoText {
-                        text: "Encodes the recorded part with the settings below once you press Stop.";
+                        text: Recorder.encode-live
+                            ? "Encodes while you record with the settings below, so the file is ready soon after you press Stop."
+                            : "Encodes the recorded part with the settings below once you press Stop.";
                     }
 
                     LabeledRow {
@@ -239,7 +241,67 @@ export component RecorderPanel inherits Rectangle {
                     }
 
                     LabeledRow {
-                        label: "Bitrate";
+                        label: "Encoder";
+
+                        Select {
+                            horizontal-stretch: 1;
+                            options: Recorder.encoders;
+                            current-index <=> Recorder.encoder;
+                            enabled: !root.locked;
+                        }
+                    }
+
+                    LabeledRow {
+                        label: "Rate control";
+
+                        Select {
+                            horizontal-stretch: 1;
+                            options: ["Variable", "Average", "Constant", "Constrained"];
+                            current-index <=> Recorder.rate-control;
+                            enabled: !root.locked;
+                        }
+                    }
+
+                    InfoText {
+                        text: Recorder.rate-control == 1 ? "The bitrate changes from scene to scene but averages out to the one set below."
+                            : Recorder.rate-control == 2 ? "The bitrate stays the same the whole way through."
+                            : Recorder.rate-control == 3 ? "Keeps the quality steady, but the bitrate never goes above the max set below."
+                            : "Keeps the quality steady. Busy scenes get more bits, calm ones fewer.";
+                    }
+
+                    if Recorder.rate-control == 0 || Recorder.rate-control == 3: LabeledRow {
+                        label: "Quality";
+
+                        Select {
+                            horizontal-stretch: 1;
+                            options: ["High", "Medium", "Low", "Custom"];
+                            current-index <=> Recorder.quality;
+                            enabled: !root.locked;
+                        }
+                    }
+
+                    if (Recorder.rate-control == 0 || Recorder.rate-control == 3) && Recorder.quality == 3: LabeledRow {
+                        label: "CRF";
+
+                        crf-field := TextField {
+                            horizontal-stretch: 1;
+                            text <=> Recorder.crf;
+                            numeric: true;
+                            whole: true;
+                            valid: crf-field.draft.to-float() >= 0 && crf-field.draft.to-float() <= 51;
+                            enabled: !root.locked;
+                        }
+
+                        Text {
+                            text: "0 to 51, lower is better";
+                            color: Theme.muted;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    if Recorder.rate-control != 0: LabeledRow {
+                        label: Recorder.rate-control == 3 ? "Max bitrate" : "Bitrate";
 
                         TextField {
                             horizontal-stretch: 1;
@@ -296,6 +358,12 @@ export component RecorderPanel inherits Rectangle {
                     Checkbox {
                         text: "Draw subtitles into the video";
                         checked <=> Recorder.burn-subtitles;
+                        enabled: !root.locked;
+                    }
+
+                    Checkbox {
+                        text: "Encode during playback";
+                        checked <=> Recorder.encode-live;
                         enabled: !root.locked;
                     }
                 }

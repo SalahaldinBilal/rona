@@ -540,7 +540,12 @@ impl Mpv {
     }
 
     pub fn next_event(&self) -> Option<Event> {
-        let event = unsafe { &*(self.0.api.wait_event)(self.0.handle, 0.0) };
+        self.wait_event(0.0)
+    }
+
+    /// Blocks for up to `timeout` seconds, so only for threads that own this instance.
+    pub fn wait_event(&self, timeout: f64) -> Option<Event> {
+        let event = unsafe { &*(self.0.api.wait_event)(self.0.handle, timeout) };
         match event.event_id {
             EVENT_NONE => None,
             EVENT_SHUTDOWN => Some(Event::Shutdown),

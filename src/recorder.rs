@@ -3,16 +3,17 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use slint::{ComponentHandle, Model, SharedString, Timer, TimerMode};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
+use crate::encoders::{self, Available, Codec, Vendor};
 use crate::logging::{debug, info, warn};
 use crate::mkv_cut;
 use crate::mpv::{Event, Mpv, PropertyValue};
 use crate::recorder_window;
-use crate::{AppWindow, EventState, Player, Recorder as RecorderUi, format_time, http_cache, log_error};
+use crate::{AppWindow, EventState, Panels, Player, Recorder as RecorderUi, format_time, http_cache, log_error};
 
 pub const DUMP_COMMAND_ID: u64 = 1;
 
@@ -22,6 +23,10 @@ const ENCODER_TIME_POS: u64 = 1;
 // mpv keeps 50 MiB of played data by default, too little to dump a long recording afterwards.
 const RECORDING_BACK_BUFFER: &str = "4GiB";
 const DEFAULT_BACK_BUFFER: &str = "50MiB";
+// The encoder runs behind playback while recording, paused once it catches up and resumed this far behind.
+const ENCODER_RESUME_GAP: f32 = 2.0;
+// How far past Stop the encoder may already be before the range is encoded again.
+const ENCODER_OVERSHOOT: f32 = 0.25;
 
 enum Split {
     Off,
@@ -35,7 +40,17 @@ struct Session {
 
 enum Output {
     Copy { base: PathBuf, extension: String, split: Split, matroska: Option<Matroska> },
-    Encode { source: String, settings: EncodeSettings, subtitle: Option<i32>, audio: Option<i32>, path: PathBuf },
+    Encode(Encode),
+}
+
+struct Encode {
+    // Only when encoding during playback, otherwise the encoder starts at Stop.
+    job: Option<EncodeJob>,
+    source: String,
+    settings: EncodeSettings,
+    subtitle: Option<i32>,
+    audio: Option<i32>,
+    path: PathBuf,
 }
 
 struct Matroska {
@@ -43,9 +58,20 @@ struct Matroska {
     start_time: f64,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum RateControl {
+    Quality,
+    Average,
+    Constant,
+    Constrained,
+}
+
 struct EncodeSettings {
     extension: &'static str,
-    video_codec: &'static str,
+    codec: Codec,
+    vendor: Vendor,
+    rate_control: RateControl,
+    crf: u32,
     video_kbps: Option<u32>,
     height: Option<u32>,
     audio_codec: &'static str,
@@ -63,9 +89,49 @@ struct Dump {
 
 struct EncodeJob {
     encoder: Mpv,
+    // Where this encoder writes, which differs from `path` only for a range encoded again.
     output: PathBuf,
-    progress: Arc<AtomicU32>,
-    finished: Arc<AtomicBool>,
+    path: PathBuf,
+    // The first encoder, paused, when the range had to be encoded again. It writes to `path` until dropped.
+    replaced: Option<Mpv>,
+    progress: Arc<Progress>,
+}
+
+// Shared with the encoder's event handler.
+struct Progress {
+    start: f32,
+    // The playback position while recording, the end after Stop. The encoder pauses once it gets there.
+    limit: AtomicU32,
+    time: AtomicU32,
+    paused: AtomicBool,
+    stopping: AtomicBool,
+    stop_sent: AtomicBool,
+    finished: AtomicBool,
+}
+
+impl Progress {
+    fn limit(&self) -> f32 {
+        f32::from_bits(self.limit.load(Ordering::Relaxed))
+    }
+
+    fn set_limit(&self, limit: f32) {
+        self.limit.store(limit.to_bits(), Ordering::Relaxed);
+    }
+
+    fn time(&self) -> f32 {
+        f32::from_bits(self.time.load(Ordering::Relaxed))
+    }
+
+    fn fraction(&self) -> f32 {
+        let span = self.limit() - self.start;
+        if span <= 0.0 { 0.0 } else { ((self.time() - self.start) / span).clamp(0.0, 1.0) }
+    }
+}
+
+enum Probe {
+    NotStarted,
+    Running(Arc<Mutex<Option<Vec<Available>>>>),
+    Done,
 }
 
 pub struct Controller {
@@ -75,6 +141,8 @@ pub struct Controller {
     session: Option<Session>,
     dump: Option<Dump>,
     job: Option<EncodeJob>,
+    hardware: Vec<Available>,
+    probe: Probe,
     poll: Timer,
 }
 
@@ -114,6 +182,8 @@ pub fn wire(app: &AppWindow, mpv: &Mpv, state: Arc<EventState>) -> Rc<RefCell<Co
         session: None,
         dump: None,
         job: None,
+        hardware: Vec::new(),
+        probe: Probe::NotStarted,
         poll: Timer::default(),
     }));
 
@@ -168,7 +238,7 @@ impl Controller {
 
     fn start(&mut self) {
         let Some(app) = self.app.upgrade() else { return };
-        let fields = recorder_window::read(&app, Fields::read);
+        let fields = recorder_window::read(&app, |ui| Fields::read(ui, &self.hardware));
         let player = app.global::<Player>();
 
         let source = self.state.path.lock().map(|path| path.clone()).unwrap_or_default();
@@ -210,16 +280,42 @@ impl Controller {
             show_text(&app, file_name(&part_path(&base, &extension, 1, &split)), |ui, text| ui.set_current_file(text));
             Output::Copy { base, extension, split, matroska }
         } else {
-            let settings = fields.encode;
-            let path = with_extension(&base, settings.extension);
-            show_text(&app, file_name(&path), |ui, text| ui.set_current_file(text));
-            Output::Encode {
-                source,
-                subtitle: selected_track(&player.get_subtitle_tracks()),
-                audio: selected_track(&player.get_audio_tracks()),
-                settings,
-                path,
+            let mut settings = fields.encode;
+            if settings.vendor != Vendor::Software
+                && !self.hardware.iter().any(|found| found.vendor == settings.vendor && found.supports(settings.codec))
+            {
+                let codec = if settings.codec == Codec::H265 { "H.265" } else { "H.264" };
+                show_status(&app, format!("This {} GPU can't encode {codec}.", settings.vendor.label()));
+                return;
             }
+            if settings.vendor == Vendor::Amd && settings.rate_control == RateControl::Constrained {
+                show_status(&app, "AMD's encoder can't do Constrained. Pick another rate control.");
+                return;
+            }
+            if settings.rate_control != RateControl::Quality && settings.video_kbps.is_none() {
+                let bits = self.state.video_bits_per_second.load(Ordering::Relaxed);
+                settings.video_kbps = (bits > 0).then(|| (bits as f64 / 1000.0).round() as u32);
+                if settings.video_kbps.is_none() {
+                    warn!("source bitrate unknown, encoding at constant quality instead");
+                }
+            }
+            let path = with_extension(&base, settings.extension);
+            let subtitle = selected_track(&player.get_subtitle_tracks());
+            let audio = selected_track(&player.get_audio_tracks());
+            let job = if fields.encode_live {
+                match start_encoder(&source, player.get_position(), None, &settings, subtitle, audio, &path) {
+                    Ok(job) => Some(job),
+                    Err(err) => {
+                        warn!("could not start encoding: {err}");
+                        show_status(&app, format!("Could not start encoding: {err}"));
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+            show_text(&app, file_name(&path), |ui, text| ui.set_current_file(text));
+            Output::Encode(Encode { job, source, settings, subtitle, audio, path })
         };
 
         info!(
@@ -227,7 +323,12 @@ impl Controller {
             player.get_position(),
             match &output {
                 Output::Copy { extension, .. } => format!("copying to .{extension}"),
-                Output::Encode { settings, .. } => format!("encoding with {} and {}", settings.video_codec, settings.audio_codec),
+                Output::Encode(encode) => format!(
+                    "encoding with {} and {} to {}",
+                    encode.settings.vendor.encoder(encode.settings.codec),
+                    encode.settings.audio_codec,
+                    encode.path.display()
+                ),
             }
         );
         self.session = Some(Session { start: player.get_position(), output });
@@ -246,8 +347,13 @@ impl Controller {
 
         if end - start < 0.5 {
             show_status(&app, "The recorded part is too short.");
-            if matches!(output, Output::Copy { matroska: None, .. }) {
-                log_error(self.mpv.command(&["set", "demuxer-max-back-bytes", DEFAULT_BACK_BUFFER]));
+            match output {
+                Output::Copy { matroska: None, .. } => {
+                    log_error(self.mpv.command(&["set", "demuxer-max-back-bytes", DEFAULT_BACK_BUFFER]));
+                }
+                Output::Encode(Encode { job: Some(job), .. }) => discard_encoder(job),
+                Output::Encode(_) => {}
+                Output::Copy { .. } => {}
             }
             return;
         }
@@ -267,24 +373,88 @@ impl Controller {
                 show(&app, |ui| ui.set_encoding(true));
                 self.dump_next();
             }
-            Output::Encode { source, mut settings, subtitle, audio, path } => {
-                if settings.video_kbps.is_none() {
-                    let bits = self.state.video_bits_per_second.load(Ordering::Relaxed);
-                    settings.video_kbps = (bits > 0).then(|| (bits as f64 / 1000.0).round() as u32);
+            Output::Encode(encode) => self.finish_encoding(&app, encode, start, end),
+        }
+    }
+
+    fn finish_encoding(&mut self, app: &AppWindow, encode: Encode, start: f32, end: f32) {
+        let Encode { job, source, settings, subtitle, audio, path } = encode;
+        let Some(job) = job else {
+            match start_encoder(&source, start, Some(end), &settings, subtitle, audio, &path) {
+                Ok(job) => {
+                    self.job = Some(job);
+                    show(app, |ui| ui.set_encoding(true));
+                    show_status(app, "Encoding 0%");
                 }
-                match start_encoder(&source, start, end, &settings, subtitle, audio, &path) {
-                    Ok(job) => {
-                        info!("encoding to {}", job.output.display());
-                        self.job = Some(job);
-                        show(&app, |ui| ui.set_encoding(true));
-                        show_status(&app, "Encoding 0%");
-                    }
-                    Err(err) => {
-                        warn!("could not start encoding: {err}");
-                        show_status(&app, format!("Could not start encoding: {err}"));
-                    }
+                Err(err) => {
+                    warn!("could not start encoding: {err}");
+                    show_status(app, format!("Could not start encoding: {err}"));
                 }
             }
+            return;
+        };
+        let time = job.progress.time();
+        if time <= end + ENCODER_OVERSHOOT {
+            job.progress.set_limit(end);
+            job.progress.stopping.store(true, Ordering::Relaxed);
+            log_error(job.encoder.command(&["set", "end", &format!("{end:.3}")]));
+            job.progress.paused.store(false, Ordering::Relaxed);
+            log_error(job.encoder.command(&["set", "pause", "no"]));
+            let fraction = job.progress.fraction();
+            self.job = Some(job);
+            show(app, |ui| ui.set_encoding(true));
+            show_status(app, format!("Encoding {:.0}%", fraction * 100.0));
+            return;
+        }
+
+        // A seek back while recording left the encoder past the end, so the range is encoded again.
+        info!("the encoder is at {time:.1} s, past the end at {end:.1} s, encoding the range again");
+        log_error(job.encoder.command(&["set", "pause", "yes"]));
+        let retry = path.with_extension(format!("part.{}", settings.extension));
+        match start_encoder(&source, start, Some(end), &settings, subtitle, audio, &retry) {
+            Ok(mut retry_job) => {
+                retry_job.path = path;
+                retry_job.replaced = Some(job.encoder);
+                self.job = Some(retry_job);
+                show(app, |ui| ui.set_encoding(true));
+                show_status(app, "Encoding 0%");
+            }
+            Err(err) => {
+                warn!("could not start encoding again: {err}");
+                discard_encoder(job);
+                show_status(app, format!("Could not start encoding: {err}"));
+            }
+        }
+    }
+
+    fn check_probe(&mut self, app: &AppWindow) {
+        match &self.probe {
+            Probe::NotStarted => {
+                if !app.global::<Panels>().get_recorder_open() {
+                    return;
+                }
+                let result = Arc::new(Mutex::new(None));
+                let slot = result.clone();
+                std::thread::spawn(move || {
+                    let found = encoders::probe();
+                    if let Ok(mut slot) = slot.lock() {
+                        *slot = Some(found);
+                    }
+                });
+                self.probe = Probe::Running(result);
+            }
+            Probe::Running(result) => {
+                let Some(found) = result.lock().ok().and_then(|mut slot| slot.take()) else { return };
+                let labels: Vec<SharedString> = std::iter::once(Vendor::Software)
+                    .chain(found.iter().map(|available| available.vendor))
+                    .map(|vendor| vendor.label().into())
+                    .collect();
+                let model = ModelRc::new(VecModel::from(labels));
+                show(app, |ui| ui.set_encoders(model.clone()));
+                self.hardware = found;
+                self.probe = Probe::Done;
+            }
+            Probe::Done => {}
         }
     }
 
@@ -313,10 +483,19 @@ impl Controller {
 
     fn tick(&mut self) {
         let Some(app) = self.app.upgrade() else { return };
+        self.check_probe(&app);
 
         if let Some(session) = &self.session {
-            let span = app.global::<Player>().get_position() - session.start;
-            show_text(&app, format_time(span.max(0.0)), |ui, text| ui.set_elapsed_text(text));
+            let position = app.global::<Player>().get_position();
+            show_text(&app, format_time((position - session.start).max(0.0)), |ui, text| ui.set_elapsed_text(text));
+            if let Output::Encode(Encode { job: Some(job), .. }) = &session.output {
+                let progress = &job.progress;
+                progress.set_limit(position);
+                if progress.paused.load(Ordering::Relaxed) && position - progress.time() > ENCODER_RESUME_GAP {
+                    progress.paused.store(false, Ordering::Relaxed);
+                    log_error(job.encoder.command(&["set", "pause", "no"]));
+                }
+            }
         }
 
         let results: Vec<Option<String>> =
@@ -335,13 +514,12 @@ impl Controller {
         }
 
         if let Some(job) = &self.job {
-            if job.finished.load(Ordering::Relaxed) {
+            if job.progress.finished.load(Ordering::Relaxed) {
                 if let Some(job) = self.job.take() {
                     finish_encoder(job, self.app.clone());
                 }
             } else {
-                let progress = f32::from_bits(job.progress.load(Ordering::Relaxed));
-                show_status(&app, format!("Encoding {:.0}%", progress * 100.0));
+                show_status(&app, format!("Encoding {:.0}%", job.progress.fraction() * 100.0));
             }
         }
     }
@@ -424,7 +602,7 @@ fn average_bytes_per_second(source: &str, duration: f32) -> Option<f32> {
 fn start_encoder(
     source: &str,
     start: f32,
-    end: f32,
+    end: Option<f32>,
     settings: &EncodeSettings,
     subtitle: Option<i32>,
     audio: Option<i32>,
@@ -432,9 +610,9 @@ fn start_encoder(
 ) -> Result<EncodeJob, String> {
     let output_text = output.to_string_lossy().into_owned();
     let start_text = format!("{start:.3}");
-    let end_text = format!("{end:.3}");
-    let video_options = settings.video_kbps.map(|kbps| format!("b={kbps}k"));
-    let audio_options = format!("b={}k", settings.audio_bitrate);
+    let end_text = end.map(|end| format!("{end:.3}"));
+    let video_options = video_options(settings);
+    let audio_options = audio_options(settings);
     let subtitle_text = match (settings.burn_subtitles, subtitle) {
         (true, Some(id)) => id.to_string(),
         _ => "no".to_string(),
@@ -445,20 +623,19 @@ fn start_encoder(
     let mut options: Vec<(&str, &str)> = vec![
         ("o", output_text.as_str()),
         ("start", start_text.as_str()),
-        ("end", end_text.as_str()),
-        ("ovc", settings.video_codec),
+        ("ovc", settings.vendor.encoder(settings.codec)),
+        ("ovcopts", video_options.as_str()),
         ("oac", settings.audio_codec),
         ("oacopts", audio_options.as_str()),
         ("sid", subtitle_text.as_str()),
         ("aid", audio_text.as_str()),
         ("cache", "yes"),
     ];
-    // Without a bitrate the codec falls back to its own quality-based default.
-    if let Some(video_options) = &video_options {
-        options.push(("ovcopts", video_options.as_str()));
-    }
     if let Some(scale) = &scale {
         options.push(("vf", scale.as_str()));
+    }
+    if let Some(end_text) = &end_text {
+        options.push(("end", end_text.as_str()));
     }
 
     debug!("encoder options {options:?}");
@@ -469,28 +646,45 @@ fn start_encoder(
         .map_err(|err| err.to_string())?;
     encoder.observe_double(ENCODER_TIME_POS, "time-pos").map_err(|err| err.to_string())?;
 
-    let progress = Arc::new(AtomicU32::new(0f32.to_bits()));
-    let finished = Arc::new(AtomicBool::new(false));
-    let (encoder_weak, event_progress, event_finished) = (encoder.downgrade(), progress.clone(), finished.clone());
+    let progress = Arc::new(Progress {
+        start,
+        limit: AtomicU32::new(end.unwrap_or(start).to_bits()),
+        time: AtomicU32::new(start.to_bits()),
+        paused: AtomicBool::new(false),
+        stopping: AtomicBool::new(end.is_some()),
+        stop_sent: AtomicBool::new(false),
+        finished: AtomicBool::new(false),
+    });
+    let (encoder_weak, event_progress) = (encoder.downgrade(), progress.clone());
     encoder
         .on_wakeup(move || {
-            let (encoder_weak, progress, finished) =
-                (encoder_weak.clone(), event_progress.clone(), event_finished.clone());
+            let (encoder_weak, progress) = (encoder_weak.clone(), event_progress.clone());
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(encoder) = encoder_weak.upgrade() else { return };
                 while let Some(event) = encoder.next_event() {
                     match event {
                         Event::PropertyChange { id: ENCODER_TIME_POS, value: Some(PropertyValue::Double(time)) } => {
-                            let fraction = ((time as f32 - start) / (end - start)).clamp(0.0, 1.0);
-                            progress.store(fraction.to_bits(), Ordering::Relaxed);
+                            let time = time as f32;
+                            progress.time.store(time.to_bits(), Ordering::Relaxed);
+                            if time < progress.limit() {
+                                continue;
+                            }
+                            if !progress.stopping.load(Ordering::Relaxed) {
+                                if !progress.paused.swap(true, Ordering::Relaxed) {
+                                    log_error(encoder.command(&["set", "pause", "yes"]));
+                                }
+                            } else if !progress.stop_sent.swap(true, Ordering::Relaxed) {
+                                // Normally `end` ends the file first, this is in case mpv missed it.
+                                log_error(encoder.command(&["stop"]));
+                            }
                         }
                         Event::EndFile { error, .. } => {
                             if let Some(error) = error {
                                 warn!("encoding ended with an error: {error}");
                             }
-                            finished.store(true, Ordering::Relaxed);
+                            progress.finished.store(true, Ordering::Relaxed);
                         }
-                        Event::Shutdown => finished.store(true, Ordering::Relaxed),
+                        Event::Shutdown => progress.finished.store(true, Ordering::Relaxed),
                         Event::Log { prefix, level, text } => {
                             crate::log_mpv_message(&format!("encoder/{prefix}"), &level, &text);
                         }
@@ -503,14 +697,82 @@ fn start_encoder(
         .map_err(|err| err.to_string())?;
     encoder.command(&["loadfile", source]).map_err(|err| err.to_string())?;
 
-    Ok(EncodeJob { encoder, output: output.to_path_buf(), progress, finished })
+    Ok(EncodeJob { encoder, output: output.to_path_buf(), path: output.to_path_buf(), replaced: None, progress })
+}
+
+// Each encoder family picks its rate control from different options, see ffmpeg's nvenc.c, amfenc_*.c and qsvenc.c.
+fn video_options(settings: &EncodeSettings) -> String {
+    let crf = settings.crf;
+    // The hardware encoders treat 0 as "not set".
+    let level = crf.max(1);
+    let rate = if settings.video_kbps.is_some() { settings.rate_control } else { RateControl::Quality };
+    let kbps = settings.video_kbps.unwrap_or(0);
+    let fixed = format!("b={kbps}k,maxrate={kbps}k,bufsize={kbps}k");
+    match (settings.vendor, rate) {
+        (Vendor::Software, RateControl::Quality) => format!("crf={crf}"),
+        (Vendor::Software, RateControl::Average) => format!("b={kbps}k"),
+        (Vendor::Software, RateControl::Constant) => {
+            // libx264 holds a fixed bitrate with minrate and maxrate alone, libx265 needs strict-cbr.
+            let options = format!("{fixed},minrate={kbps}k");
+            if settings.codec == Codec::H265 { format!("{options},x265-params=strict-cbr=1") } else { options }
+        }
+        (Vendor::Software, RateControl::Constrained) => format!("crf={crf},maxrate={kbps}k,bufsize={}k", kbps * 2),
+        (Vendor::Nvidia, RateControl::Quality) => format!("rc=vbr,cq={level},b=0"),
+        (Vendor::Nvidia, RateControl::Average) => format!("rc=vbr,b={kbps}k"),
+        (Vendor::Nvidia, RateControl::Constant) => format!("rc=cbr,{fixed}"),
+        (Vendor::Nvidia, RateControl::Constrained) => format!("rc=vbr,cq={level},maxrate={kbps}k"),
+        // hevc_amf has no qp_b.
+        (Vendor::Amd, RateControl::Quality) if settings.codec == Codec::H265 => format!("rc=cqp,qp_i={crf},qp_p={crf}"),
+        (Vendor::Amd, RateControl::Quality) => format!("rc=cqp,qp_i={crf},qp_p={crf},qp_b={crf}"),
+        (Vendor::Amd, RateControl::Average) => format!("rc=vbr_peak,b={kbps}k,maxrate={}k", kbps * 2),
+        (Vendor::Amd, RateControl::Constant) => format!("rc=cbr,{fixed}"),
+        // Refused in `start`, AMF's quality modes have no bitrate cap.
+        (Vendor::Amd, RateControl::Constrained) => format!("rc=vbr_peak,b={kbps}k,maxrate={kbps}k"),
+        // QSV picks ICQ for a quality without maxrate, CBR when maxrate equals b, and QVBR for a quality with both.
+        (Vendor::Intel, RateControl::Quality) => format!("global_quality={level}"),
+        (Vendor::Intel, RateControl::Average) => format!("b={kbps}k"),
+        (Vendor::Intel, RateControl::Constant) => fixed,
+        (Vendor::Intel, RateControl::Constrained) => {
+            format!("global_quality={level},b={}k,maxrate={kbps}k", (kbps * 3 / 4).max(1))
+        }
+    }
+}
+
+fn discard_encoder(job: EncodeJob) {
+    std::thread::spawn(move || {
+        let EncodeJob { encoder, output, replaced, .. } = job;
+        drop(encoder);
+        drop(replaced);
+        let _ = std::fs::remove_file(&output);
+        info!("discarded the encoding to {}", output.display());
+    });
+}
+
+fn audio_options(settings: &EncodeSettings) -> String {
+    let bitrate = format!("b={}k", settings.audio_bitrate);
+    if settings.audio_codec != "libopus" {
+        return bitrate;
+    }
+    let vbr = match settings.rate_control {
+        RateControl::Quality | RateControl::Average => "on",
+        RateControl::Constant => "off",
+        RateControl::Constrained => "constrained",
+    };
+    format!("{bitrate},vbr={vbr}")
 }
 
 // mpv only finishes writing the output file when the instance is destroyed, which can take a moment.
 fn finish_encoder(job: EncodeJob, app: slint::Weak<AppWindow>) {
     std::thread::spawn(move || {
-        let EncodeJob { encoder, output, .. } = job;
+        let EncodeJob { encoder, output: written, path: output, replaced, .. } = job;
         drop(encoder);
+        if let Some(replaced) = replaced {
+            drop(replaced);
+            let _ = std::fs::remove_file(&output);
+            if let Err(err) = std::fs::rename(&written, &output) {
+                warn!("could not rename {} to {}: {err}", written.display(), output.display());
+            }
+        }
         let size = file_size(&output);
         if size > 0 {
             info!("encoding finished, {} in {}", bytes_text(size), output.display());
@@ -535,10 +797,11 @@ struct Fields {
     split_minutes: SharedString,
     split_megabytes: SharedString,
     encode: EncodeSettings,
+    encode_live: bool,
 }
 
 impl Fields {
-    fn read(ui: &RecorderUi) -> Self {
+    fn read(ui: &RecorderUi, hardware: &[Available]) -> Self {
         Self {
             folder: ui.get_folder(),
             prefix: ui.get_prefix(),
@@ -546,7 +809,8 @@ impl Fields {
             split_mode: ui.get_split_mode(),
             split_minutes: ui.get_split_minutes(),
             split_megabytes: ui.get_split_megabytes(),
-            encode: encode_settings(ui),
+            encode: encode_settings(ui, hardware),
+            encode_live: ui.get_encode_live(),
         }
     }
 }
@@ -561,17 +825,44 @@ pub fn copy_fields(from: &RecorderUi, to: &RecorderUi) {
     to.set_split_megabytes(from.get_split_megabytes());
     to.set_container(from.get_container());
     to.set_video_codec(from.get_video_codec());
+    to.set_encoder(from.get_encoder());
+    to.set_rate_control(from.get_rate_control());
+    to.set_quality(from.get_quality());
+    to.set_crf(from.get_crf());
     to.set_video_bitrate(from.get_video_bitrate());
     to.set_size(from.get_size());
     to.set_audio_codec(from.get_audio_codec());
     to.set_audio_bitrate(from.get_audio_bitrate());
     to.set_burn_subtitles(from.get_burn_subtitles());
+    to.set_encode_live(from.get_encode_live());
 }
 
-fn encode_settings(ui: &RecorderUi) -> EncodeSettings {
+fn encode_settings(ui: &RecorderUi, hardware: &[Available]) -> EncodeSettings {
+    let codec = if ui.get_video_codec() == 1 { Codec::H265 } else { Codec::H264 };
+    // The Encoder list is Software followed by the hardware found.
+    let vendor = usize::try_from(ui.get_encoder() - 1)
+        .ok()
+        .and_then(|index| hardware.get(index))
+        .map_or(Vendor::Software, |available| available.vendor);
+    // High, Medium and Low per codec. H.265 needs a higher CRF than H.264 for the same quality.
+    let presets = if codec == Codec::H265 { [22, 28, 32] } else { [18, 23, 28] };
+    let crf = match ui.get_quality() {
+        0 => presets[0],
+        2 => presets[2],
+        3 => ui.get_crf().trim().parse::<u32>().unwrap_or(presets[1]),
+        _ => presets[1],
+    };
     EncodeSettings {
         extension: if ui.get_container() == 1 { "mkv" } else { "mp4" },
-        video_codec: if ui.get_video_codec() == 1 { "libx265" } else { "libx264" },
+        codec,
+        vendor,
+        rate_control: match ui.get_rate_control() {
+            1 => RateControl::Average,
+            2 => RateControl::Constant,
+            3 => RateControl::Constrained,
+            _ => RateControl::Quality,
+        },
+        crf,
         video_kbps: parse_positive(ui.get_video_bitrate().as_str()).map(|kbps| kbps as u32),
         height: match ui.get_size() {
             1 => Some(1080),
