@@ -260,7 +260,8 @@ impl Config {
             ("cscale", cscale),
             ("dscale", dscale),
             ("deband", yes_no(self.deband)),
-            ("video-aspect-override", ASPECT_RATIOS[self.aspect].into()),
+            // settings.conf keeps "-1" for the file's own aspect, which mpv now wants as "no".
+            ("video-aspect-override", if self.aspect == 0 { "no" } else { ASPECT_RATIOS[self.aspect] }.into()),
             ("alang", self.audio_languages.clone()),
             ("volume-max", VOLUME_LIMITS[self.volume_max].into()),
             ("af", if self.normalize { "lavfi=[dynaudnorm]" } else { "" }.into()),
