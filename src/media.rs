@@ -312,7 +312,7 @@ pub enum LinkCheck {
 /// Blocks on the network, so it runs off the UI thread.
 pub fn check_link(url: &str) -> LinkCheck {
     let host = link_host(url);
-    let response = match http_cache::agent().get(url).header("Range", "bytes=0-4095").call() {
+    let response = match http_cache::request(&http_cache::agent(), url).header("Range", "bytes=0-4095").call() {
         Ok(response) => response,
         Err(err) => return LinkCheck::Failed(http_cache::network_error_text(&err, &host)),
     };

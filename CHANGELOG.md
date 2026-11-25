@@ -5,10 +5,18 @@
 ### Added
 - Re-encoded recordings have a rate control choice: Variable (the default), Average, Constant or Constrained. Variable and Constrained take a quality, High, Medium, Low or a custom CRF. Opus audio follows the choice. AAC keeps its fixed bitrate.
 - Re-encoding can use the GPU's encoder (NVIDIA, AMD or Intel). The Encoder list shows the ones that work on your machine. AMD can't do Constrained.
+- Playlist files (`.rl`). They list files and links, with a title, cover and description, and for series the season and episode of each video. Entries can have a thumbnail, a part to play, ranges to skip (like an opening), extra subtitles, preferred languages, a volume change, mirror links and web headers. Sections like seasons or discs fold in the panel, and a section can include another playlist file.
+- Open a playlist file like any other file, from a link, or pass its whole JSON text as an argument.
+- Save the open list as a playlist file from the new ⋯ menu in the playlist panel or with Ctrl+S, and edit the playlist and each entry from there. Changes stay unsaved until you press Save, unless you turn on "Save changes automatically". Rona asks before closing or opening something else over unsaved changes.
+- Missing files show in the playlist, and Find file points them at their new place. Rona then looks for the others in the same folder.
+- Export the playlist as M3U, and add files or links to the open playlist.
+- The installer makes Rona the app for `.rl` files, so they open with a double-click. Installing on Linux from `share` (or Nix) registers the file type too.
 
 ### Changed
 - Re-encoding runs while you record instead of after Stop, so the file is ready right after. Seeking back during a recording makes it encode the range again at Stop. Turn off "Encode during playback" to encode after Stop.
 - The recorder opens in re-encode mode.
+- Playlist rows show how long each file is once it has played.
+- Alt+F4 saves the resume position and window place like the close button does.
 
 ## [0.1.6] - 2026-11-23
 - Seek is now exact with an option for keyframe seek.

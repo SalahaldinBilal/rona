@@ -5,11 +5,16 @@ import { read, root, TaskError } from "./util.mts";
 export interface Extensions {
     video: string[];
     audio: string[];
+    playlist: string[];
 }
 
 /** The app's extension lists, read from src/extensions.rs so the installer registers exactly what it plays. */
 export function readExtensions(source = read(path.join(root, "src/extensions.rs"))): Extensions {
-    return { video: list(source, "VIDEO_EXTENSIONS"), audio: list(source, "AUDIO_EXTENSIONS") };
+    return {
+        video: list(source, "VIDEO_EXTENSIONS"),
+        audio: list(source, "AUDIO_EXTENSIONS"),
+        playlist: list(source, "PLAYLIST_EXTENSIONS"),
+    };
 }
 
 function list(source: string, name: string): string[] {

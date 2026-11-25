@@ -56,6 +56,30 @@ pub fn agent() -> ureq::Agent {
     ureq::Agent::new_with_config(builder.build())
 }
 
+type HeadersByLink = HashMap<String, Vec<(String, String)>>;
+
+// Headers a playlist asks for, per link. Cleared when a new playlist opens.
+static HEADERS: Mutex<Option<HeadersByLink>> = Mutex::new(None);
+
+pub fn add_headers(url: String, headers: Vec<(String, String)>) {
+    lock(&HEADERS).get_or_insert_with(HashMap::new).insert(url, headers);
+}
+
+pub fn clear_headers() {
+    *lock(&HEADERS) = None;
+}
+
+/// A GET for `url` with the headers its playlist gave, which win over the agent's own User-Agent.
+pub fn request(agent: &ureq::Agent, url: &str) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
+    let mut request = agent.get(url);
+    if let Some(headers) = lock(&HEADERS).as_ref().and_then(|headers| headers.get(url)) {
+        for (name, value) in headers {
+            request = request.header(name.as_str(), value.as_str());
+        }
+    }
+    request
+}
+
 pub fn header<'a>(response: &'a Response, name: &str) -> Option<&'a str> {
     response.headers().get(name)?.to_str().ok()
 }
@@ -488,7 +512,7 @@ impl HttpStream {
 
         if self.connection.as_ref().is_none_or(|connection| connection.position > start) {
             info!("stream #{}: downloading again from the start to reach byte {start}", self.id);
-            let response = self.agent.get(&self.url).call().map_err(|err| err.to_string())?;
+            let response = request(&self.agent, &self.url).call().map_err(|err| err.to_string())?;
             self.connection = Some(Connection::new(response, 0));
         }
         while self.connection.as_ref().is_some_and(|connection| connection.position < start) {
@@ -544,7 +568,7 @@ impl HttpStream {
 }
 
 fn range_request(agent: &ureq::Agent, url: &str, start: u64) -> Result<Response, ureq::Error> {
-    agent.get(url).header("Range", format!("bytes={start}-")).call()
+    request(agent, url).header("Range", format!("bytes={start}-")).call()
 }
 
 fn total_size(content_range: &str) -> Option<u64> {

@@ -19,8 +19,27 @@ test("the installer registers the extensions the app plays", () => {
     assert.ok(install.includes('"Software\\Classes\\Rona.flac" "" "FLAC audio"'));
 });
 
+test("Rona becomes the default for its own playlist files, and only for those", () => {
+    const { install } = sections();
+    assert.ok(install.includes('WriteRegStr SHCTX "Software\\Classes\\.rl" "" "Rona.rl"'));
+    const defaults = install.split("\n").filter((line) => /"Software\\Classes\\\.[a-z0-9]+" ""/.test(line));
+    assert.deepEqual(defaults.map((line) => line.trim()), ['WriteRegStr SHCTX "Software\\Classes\\.rl" "" "Rona.rl"']);
+});
+
+// Another app may have become the default for .rl since, and uninstalling Rona must not take that away.
+test("uninstalling clears the playlist default only while it still points at Rona", () => {
+    const { uninstall } = sections();
+    const lines = uninstall.split("\n").map((line) => line.trim());
+    const read = lines.indexOf('ReadRegStr $0 SHCTX "Software\\Classes\\.rl" ""');
+    assert.ok(read >= 0);
+    assert.equal(lines[read + 1], 'StrCmp $0 "Rona.rl" 0 keep_default_rl');
+    assert.equal(lines[read + 2], 'DeleteRegValue SHCTX "Software\\Classes\\.rl" ""');
+    assert.equal(lines[read + 3], "keep_default_rl:");
+});
+
 test("a miscounted extension list fails instead of registering the wrong set", () => {
-    const source = 'pub const VIDEO_EXTENSIONS: [&str; 3] = ["mkv", "mp4"];\npub const AUDIO_EXTENSIONS: [&str; 1] = ["mp3"];';
+    const source =
+        'pub const VIDEO_EXTENSIONS: [&str; 3] = ["mkv", "mp4"];\npub const AUDIO_EXTENSIONS: [&str; 1] = ["mp3"];\npub const PLAYLIST_EXTENSIONS: [&str; 1] = ["rl"];';
     assert.throws(() => readExtensions(source), /VIDEO_EXTENSIONS/);
 });
 

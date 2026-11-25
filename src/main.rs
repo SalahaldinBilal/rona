@@ -9,6 +9,7 @@ mod color;
 mod encoders;
 mod extensions;
 mod http_cache;
+mod images;
 mod instance;
 mod logging;
 mod media;
@@ -16,6 +17,8 @@ mod mkv_cut;
 mod mpv;
 mod opener;
 mod playlist;
+mod playlist_edit;
+mod playlist_file;
 mod recorder;
 mod recorder_window;
 mod resume;
@@ -296,6 +299,7 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn Error>> {
         .map_err(|err| format!("could not attach the video renderer: {err:?}"))?;
 
     opener::wire(&app, &mpv, &osd, loader);
+    playlist_edit::wire(&app, &osd);
     wire_playback(&mpv, &app, &osd, &config);
     wire_window_controls(&app, &osd, &config, &saved_state);
     let _download_watch = watch_download(&app, &state);
@@ -428,9 +432,11 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
     while let Some(event) = mpv.next_event() {
         match event {
             Event::PropertyChange { id: TIME_POS, value } => {
-                player.set_position(number(value).unwrap_or(0.0) as f32);
+                let position = number(value).unwrap_or(0.0);
+                player.set_position(position as f32);
                 update_time_text(player);
                 state.chapter_skip.lock().unwrap().check(mpv, app);
+                playlist::check_skip(mpv, position);
             }
             Event::PropertyChange { id: CHAPTER, value } => {
                 let mut chapter_skip = state.chapter_skip.lock().unwrap();
@@ -438,8 +444,10 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                 chapter_skip.check(mpv, app);
             }
             Event::PropertyChange { id: DURATION, value } => {
-                player.set_duration(number(value).unwrap_or(0.0) as f32);
+                let duration = number(value).unwrap_or(0.0);
+                player.set_duration(duration as f32);
                 update_time_text(player);
+                playlist::duration_known(duration);
             }
             Event::PropertyChange { id: PAUSE, value: Some(PropertyValue::Flag(paused)) } => {
                 info!("{} at {:.1} s", if paused { "paused" } else { "playing" }, player.get_position());
@@ -450,9 +458,17 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                 }
             }
             Event::Hook { kind, id } => {
-                debug!("mpv hook {}", if kind == resume::HOOK_LOAD { "on_load" } else { "on_unload" });
+                debug!("mpv hook {}", match kind {
+                    resume::HOOK_LOAD => "on_load",
+                    resume::HOOK_UNLOAD => "on_unload",
+                    _ => "on_preloaded",
+                });
                 if kind == resume::HOOK_LOAD {
                     volume::file_loading(&mpv.get_string("stream-open-filename").unwrap_or_default());
+                    playlist::file_loading(mpv);
+                }
+                if kind == playlist::HOOK_PRELOADED {
+                    playlist::file_preloaded(mpv);
                 }
                 resume::handle_hook(mpv, kind, id);
             }
@@ -816,9 +832,11 @@ fn show_pre_read(player: &Player, state: &EventState, path: &str) {
     if let Some(ambient) = &info.ambient {
         player.set_ambient_image(slint::Image::from_rgba8(ambient.clone()));
     }
-    player.set_audio_title(info.title.clone().unwrap_or_else(|| file_stem_name(path)).into());
-    player.set_audio_artist(info.artist.as_str().into());
-    player.set_audio_album(info.album_line.as_str().into());
+    let overrides = playlist::audio_overrides(path);
+    let title = overrides.title.or_else(|| info.title.clone()).unwrap_or_else(|| file_stem_name(path));
+    player.set_audio_title(title.into());
+    player.set_audio_artist(overrides.artist.unwrap_or_else(|| info.artist.clone()).into());
+    player.set_audio_album(overrides.album_line.unwrap_or_else(|| info.album_line.clone()).into());
     if let Ok(mut audio) = state.audio.lock() {
         audio.bit_depth = info.bit_depth;
         show_audio_format(player, &audio);
@@ -957,8 +975,9 @@ fn apply_tags(player: &Player, tags: AudioTags) {
     if player.get_phase() != Phase::Playing {
         return;
     }
-    player.set_audio_artist(tags.artist.into());
-    player.set_audio_album(tags.album_line.into());
+    let overrides = playlist::current_audio_overrides();
+    player.set_audio_artist(overrides.artist.unwrap_or(tags.artist).into());
+    player.set_audio_album(overrides.album_line.unwrap_or(tags.album_line).into());
 }
 
 fn read_chapters(mpv: &Mpv) -> Vec<ChapterItem> {
@@ -1696,6 +1715,11 @@ fn wire_window_controls(app: &AppWindow, osd: &Osd, config: &SharedConfig, saved
 
     let (app_weak, close_config, close_state) = (app.as_weak(), config.clone(), saved_state.clone());
     controls.on_close(move || {
+        if playlist::has_unsaved_changes() {
+            info!("asking to save the playlist before closing");
+            playlist_edit::ask_to_save(playlist_edit::Then::Close);
+            return;
+        }
         if let Some(app) = app_weak.upgrade() {
             info!("closing the window");
             resume::save_now();
@@ -1706,6 +1730,15 @@ fn wire_window_controls(app: &AppWindow, osd: &Osd, config: &SharedConfig, saved
             recorder_window::close_for_exit();
             log_error(app.window().hide());
         }
+    });
+
+    // Alt+F4 and the taskbar's Close take the same path as the close button, so nothing is left unsaved.
+    let app_weak = app.as_weak();
+    app.window().on_close_requested(move || {
+        if let Some(app) = app_weak.upgrade() {
+            app.global::<WindowControls>().invoke_close();
+        }
+        slint::CloseRequestResponse::KeepWindowShown
     });
 
     let app_weak = app.as_weak();

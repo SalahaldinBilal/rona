@@ -35,8 +35,8 @@ component Details inherits VerticalLayout {
 
     spacing: 4px;
 
-    if Player.track-number > 0 && Player.playlist.length > 1: Text {
-        text: "TRACK " + Player.track-number + " OF " + Player.playlist.length;
+    if Player.track-number > 0 && Player.playlist-count > 1: Text {
+        text: "TRACK " + Player.track-number + " OF " + Player.playlist-count;
         color: Theme.muted;
         font-size: 11px;
         font-weight: 600;

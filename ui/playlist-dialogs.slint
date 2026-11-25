@@ -1,0 +1,1237 @@
+import { Theme } from "theme.slint";
+import { Panels, PlaylistDoc, HeaderItem } from "state.slint";
+import { Icon } from "components/icon.slint";
+import { IconButton } from "components/buttons.slint";
+import { Clickable } from "components/clickable.slint";
+import { TextField, Checkbox, Segmented, Select, TextButton } from "components/form.slint";
+
+component Heading inherits Text {
+    color: Theme.muted;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+component Hint inherits Text {
+    color: Theme.muted;
+    font-size: 12px;
+    wrap: word-wrap;
+}
+
+component Unit inherits Text {
+    color: Theme.muted;
+    font-size: 12px;
+    vertical-alignment: center;
+}
+
+component Row inherits HorizontalLayout {
+    in property <string> label;
+    spacing: 10px;
+
+    Text {
+        width: 110px;
+        text: root.label;
+        color: Theme.muted;
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+
+    @children
+}
+
+component SmallButton inherits TextButton {
+    height: 30px;
+}
+
+component RemoveButton inherits IconButton {
+    width: 30px;
+    height: 30px;
+    highlight-height: 30px;
+
+    Icon {
+        width: 12px;
+        height: 12px;
+        stroke-commands: "M 5 5 L 13 13 M 13 5 L 5 13";
+    }
+}
+
+component Tabs inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> current-index;
+
+    height: 36px;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        spacing: 2px;
+        alignment: start;
+
+        for option[index] in root.options: Rectangle {
+            width: label.preferred-width + 20px;
+
+            label := Text {
+                text: option;
+                color: index == root.current-index ? Theme.text : tab-area.has-hover ? Theme.text : Theme.muted;
+                font-size: 12px;
+                font-weight: index == root.current-index ? 600 : 400;
+            }
+
+            Rectangle {
+                y: parent.height - 2px;
+                height: 2px;
+                background: index == root.current-index ? Theme.accent : transparent;
+            }
+
+            tab-area := Clickable {
+                clicked => { root.current-index = index; }
+            }
+        }
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.line;
+    }
+}
+
+component Page inherits Flickable {
+    content-height: content.preferred-height;
+
+    content := VerticalLayout {
+        width: root.width;
+        padding: 16px;
+        padding-top: 14px;
+        spacing: 10px;
+        alignment: start;
+
+        @children
+    }
+}
+
+// The frame every playlist dialog uses: a dimmed backdrop over the video area, a title bar, tabs and a footer.
+component DialogFrame inherits Rectangle {
+    in property <string> title;
+    in property <length> box-width: 600px;
+    in property <length> box-height: 500px;
+    callback dismiss();
+
+    background: #00000080;
+
+    TouchArea {
+        clicked => { root.dismiss(); }
+    }
+
+    Rectangle {
+        width: min(root.box-width, root.width - 32px);
+        height: min(root.box-height, root.height - 32px);
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.line;
+        background: Theme.chrome;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000099;
+        clip: true;
+
+        TouchArea {
+            clicked => { Panels.focus-requests += 1; }
+        }
+
+        VerticalLayout {
+            Rectangle {
+                height: 40px;
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 4px;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.title;
+                        color: Theme.text;
+                        font-size: 13px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        IconButton {
+                            clicked => { root.dismiss(); }
+
+                            Icon {
+                                stroke-commands: "M 5 5 L 13 13 M 13 5 L 5 13";
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.line;
+                }
+            }
+
+            @children
+        }
+    }
+}
+
+component Footer inherits Rectangle {
+    height: 52px;
+
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: Theme.line;
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 8px;
+
+        @children
+    }
+}
+
+component Preview inherits Rectangle {
+    in property <bool> has-image;
+    in property <image> source;
+
+    border-radius: 5px;
+    border-width: root.has-image ? 0px : 1px;
+    border-color: Theme.line;
+    background: root.has-image ? transparent : #ffffff0a;
+    clip: true;
+
+    if root.has-image: Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.source;
+        image-fit: cover;
+    }
+
+    if !root.has-image: Text {
+        text: "No image";
+        color: Theme.muted;
+        font-size: 11px;
+    }
+}
+
+component ImageField inherits Row {
+    in-out property <string> value;
+    in property <string> placeholder: "A file or a link";
+    callback browse();
+    callback changed-value();
+
+    TextField {
+        horizontal-stretch: 1;
+        text <=> root.value;
+        placeholder: root.placeholder;
+        edited => { root.changed-value(); }
+    }
+
+    VerticalLayout {
+        alignment: center;
+
+        SmallButton {
+            text: "Browse...";
+            clicked => { root.browse(); }
+        }
+    }
+}
+
+component HeaderList inherits VerticalLayout {
+    in property <[HeaderItem]> headers;
+    callback remove(int);
+    callback add();
+
+    spacing: 6px;
+
+    for header[index] in root.headers: HorizontalLayout {
+        spacing: 6px;
+
+        TextField {
+            width: 150px;
+            text <=> header.name;
+            placeholder: "Name";
+        }
+
+        TextField {
+            horizontal-stretch: 1;
+            text <=> header.value;
+            placeholder: "Value";
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            RemoveButton {
+                clicked => { root.remove(index); }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: start;
+
+        SmallButton {
+            text: "Add header";
+            clicked => { root.add(); }
+        }
+    }
+}
+
+export component PlaylistDetailsDialog inherits DialogFrame {
+    title: "Playlist details";
+
+    function close() {
+        PlaylistDoc.details-cancel();
+        Panels.focus-requests += 1;
+    }
+
+    dismiss => { root.close(); }
+
+    Tabs {
+        options: ["General", "Playback", "Sections", "Web requests"];
+        current-index <=> PlaylistDoc.details-page;
+    }
+
+    Rectangle {
+        vertical-stretch: 1;
+
+        if PlaylistDoc.details-page == 0: Page {
+            HorizontalLayout {
+                spacing: 14px;
+
+                Preview {
+                    width: 62px;
+                    height: 88px;
+                    has-image: PlaylistDoc.d-has-cover;
+                    source: PlaylistDoc.d-cover-image;
+                }
+
+                VerticalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    ImageField {
+                        label: "Cover";
+                        value <=> PlaylistDoc.d-cover;
+                        browse => { PlaylistDoc.browse-image(0); }
+                        changed-value => { PlaylistDoc.preview-cover(PlaylistDoc.d-cover); }
+                    }
+
+                    ImageField {
+                        label: "Background";
+                        value <=> PlaylistDoc.d-background;
+                        placeholder: "Empty uses the cover";
+                        browse => { PlaylistDoc.browse-image(1); }
+                    }
+                }
+            }
+
+            Row {
+                label: "Type";
+
+                Segmented {
+                    horizontal-stretch: 1;
+                    options: ["Series", "Music", "Other"];
+                    current-index <=> PlaylistDoc.type;
+                }
+            }
+
+            Row {
+                label: "Title";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.d-title;
+                }
+            }
+
+            if PlaylistDoc.type == 0: Row {
+                label: "Series name";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.d-series;
+                    placeholder: "Optional";
+                }
+            }
+
+            if PlaylistDoc.type == 1: Row {
+                label: "Artist";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.d-artist;
+                }
+            }
+
+            if PlaylistDoc.type == 1: Row {
+                label: "Album";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.d-album;
+                }
+            }
+
+            Row {
+                label: "Year";
+
+                TextField {
+                    width: 80px;
+                    text <=> PlaylistDoc.d-year;
+                    numeric: true;
+                    whole: true;
+                    positive: true;
+                    optional: true;
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            Row {
+                label: "Description";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.d-description;
+                    placeholder: "Optional";
+                }
+            }
+
+            Row {
+                label: "Link";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.d-link;
+                    placeholder: "https://";
+                }
+            }
+
+            Row {
+                label: "Author";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.d-author;
+                    placeholder: "Optional";
+                }
+            }
+        }
+
+        if PlaylistDoc.details-page == 1: Page {
+            Row {
+                label: "Shuffle";
+
+                Segmented {
+                    horizontal-stretch: 1;
+                    options: ["As last time", "Off", "On"];
+                    current-index <=> PlaylistDoc.d-shuffle;
+                }
+            }
+
+            Row {
+                label: "Repeat";
+
+                Segmented {
+                    horizontal-stretch: 1;
+                    options: ["As last time", "Off", "Once", "Forever"];
+                    current-index <=> PlaylistDoc.d-repeat;
+                }
+            }
+
+            Hint {
+                text: "These apply when the playlist opens, instead of what Rona remembered for this kind of playlist.";
+            }
+
+            Row {
+                label: "Start at entry";
+
+                TextField {
+                    width: 80px;
+                    text <=> PlaylistDoc.d-start;
+                    placeholder: "1";
+                    numeric: true;
+                    whole: true;
+                    positive: true;
+                    optional: true;
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            Checkbox {
+                text: "Save changes automatically";
+                checked <=> PlaylistDoc.d-autosave;
+            }
+
+            Hint {
+                text: "Off by default. Changes in the panel then stay unsaved until you press Save.";
+            }
+        }
+
+        if PlaylistDoc.details-page == 2: Page {
+            Hint {
+                text: "Removing a section keeps its entries, outside any section. Drag an entry past a heading in the panel to move it into that section.";
+            }
+
+            for section[index] in PlaylistDoc.d-sections: HorizontalLayout {
+                spacing: 6px;
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> section.title;
+                    placeholder: "Title";
+                }
+
+                TextField {
+                    width: 70px;
+                    text <=> section.number;
+                    placeholder: PlaylistDoc.type == 1 ? "Disc" : "Season";
+                    numeric: true;
+                    whole: true;
+                    positive: true;
+                    optional: true;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    IconButton {
+                        width: 30px;
+                        height: 30px;
+                        highlight-height: 30px;
+                        enabled: index > 0;
+                        clicked => { PlaylistDoc.move-section(index, -1); }
+
+                        Icon {
+                            width: 10px;
+                            height: 10px;
+                            viewbox: 10;
+                            stroke-commands: "M 2 6.5 L 5 3.5 L 8 6.5";
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    IconButton {
+                        width: 30px;
+                        height: 30px;
+                        highlight-height: 30px;
+                        enabled: index < PlaylistDoc.d-sections.length - 1;
+                        clicked => { PlaylistDoc.move-section(index, 1); }
+
+                        Icon {
+                            width: 10px;
+                            height: 10px;
+                            viewbox: 10;
+                            stroke-commands: "M 2 3.5 L 5 6.5 L 8 3.5";
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    RemoveButton {
+                        clicked => { PlaylistDoc.remove-section(index); }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: start;
+
+                SmallButton {
+                    text: "Add section";
+                    clicked => { PlaylistDoc.add-section(); }
+                }
+            }
+        }
+
+        if PlaylistDoc.details-page == 3: Page {
+            Hint {
+                text: "Sent with every link in this playlist. An entry can add its own or leave these out.";
+            }
+
+            Row {
+                label: "User-Agent";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.d-user-agent;
+                    placeholder: "Rona's default";
+                }
+            }
+
+            Row {
+                label: "Referer";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.d-referer;
+                    placeholder: "None";
+                }
+            }
+
+            Heading { text: "OTHER HEADERS"; }
+
+            HeaderList {
+                headers: PlaylistDoc.d-headers;
+                remove(index) => { PlaylistDoc.remove-header(index); }
+                add => { PlaylistDoc.add-header(); }
+            }
+        }
+    }
+
+    Footer {
+        Text {
+            horizontal-stretch: 1;
+            text: PlaylistDoc.d-footer;
+            color: Theme.muted;
+            font-size: 12px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            TextButton {
+                text: "Cancel";
+                ghost: true;
+                clicked => { root.close(); }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            TextButton {
+                width: 80px;
+                text: "Save";
+                primary: true;
+                clicked => {
+                    PlaylistDoc.details-save();
+                    Panels.focus-requests += 1;
+                }
+            }
+        }
+    }
+}
+
+component TimeField inherits TextField {
+    width: 80px;
+    valid: PlaylistDoc.valid-time(self.draft);
+}
+
+export component EntryDialog inherits DialogFrame {
+    title: "Entry " + (PlaylistDoc.e-index + 1) + " of " + PlaylistDoc.e-count;
+
+    function close() {
+        PlaylistDoc.entry-cancel();
+        Panels.focus-requests += 1;
+    }
+
+    dismiss => { root.close(); }
+
+    Tabs {
+        options: [PlaylistDoc.type == 0 ? "Episode" : PlaylistDoc.type == 1 ? "Track" : "Details", "Source", "Playback", "Subtitles and audio"];
+        current-index <=> PlaylistDoc.entry-page;
+    }
+
+    Rectangle {
+        vertical-stretch: 1;
+
+        if PlaylistDoc.entry-page == 0: Page {
+            HorizontalLayout {
+                spacing: 14px;
+
+                Preview {
+                    width: PlaylistDoc.type == 1 ? 84px : 150px;
+                    height: 84px;
+                    has-image: PlaylistDoc.e-has-thumbnail;
+                    source: PlaylistDoc.e-thumbnail-image;
+                }
+
+                VerticalLayout {
+                    spacing: 6px;
+                    alignment: center;
+
+                    ImageField {
+                        label: PlaylistDoc.type == 1 ? "Cover" : "Thumbnail";
+                        value <=> PlaylistDoc.e-thumbnail;
+                        browse => { PlaylistDoc.browse-entry(0); }
+                        changed-value => { PlaylistDoc.preview-thumbnail(PlaylistDoc.e-thumbnail); }
+                    }
+
+                    Hint {
+                        text: PlaylistDoc.type == 1 ? "Empty uses the file's own cover." : "Empty shows a plain tile.";
+                    }
+                }
+            }
+
+            Row {
+                label: "Title";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.e-title;
+                    placeholder: "The file's own title";
+                }
+            }
+
+            if PlaylistDoc.type == 0: Row {
+                label: "Season";
+
+                TextField {
+                    width: 70px;
+                    text <=> PlaylistDoc.e-season;
+                    placeholder: "Section's";
+                    numeric: true;
+                    whole: true;
+                    optional: true;
+                }
+
+                Unit { text: "Episode"; }
+
+                TextField {
+                    width: 70px;
+                    text <=> PlaylistDoc.e-episode;
+                    numeric: true;
+                    whole: true;
+                    optional: true;
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            if PlaylistDoc.type == 0: Row {
+                label: "Absolute no.";
+
+                TextField {
+                    width: 70px;
+                    text <=> PlaylistDoc.e-absolute;
+                    numeric: true;
+                    whole: true;
+                    optional: true;
+                }
+
+                Unit { text: "for numbering across seasons"; }
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            if PlaylistDoc.type == 0: Row {
+                label: "Aired";
+
+                TextField {
+                    width: 120px;
+                    text <=> PlaylistDoc.e-aired;
+                    placeholder: "2023-10-06";
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            if PlaylistDoc.type == 1: Row {
+                label: "Artist";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.e-artist;
+                    placeholder: "The file's own artist";
+                }
+            }
+
+            if PlaylistDoc.type == 1: Row {
+                label: "Album";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.e-album;
+                    placeholder: "The file's own album";
+                }
+            }
+
+            if PlaylistDoc.type == 1: Row {
+                label: "Track";
+
+                TextField {
+                    width: 70px;
+                    text <=> PlaylistDoc.e-track;
+                    numeric: true;
+                    whole: true;
+                    optional: true;
+                }
+
+                Unit { text: "Disc"; }
+
+                TextField {
+                    width: 70px;
+                    text <=> PlaylistDoc.e-disc;
+                    numeric: true;
+                    whole: true;
+                    optional: true;
+                }
+
+                Unit { text: "Year"; }
+
+                TextField {
+                    width: 80px;
+                    text <=> PlaylistDoc.e-year;
+                    numeric: true;
+                    whole: true;
+                    optional: true;
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            if PlaylistDoc.section-names.length > 1: Row {
+                label: "Section";
+
+                Select {
+                    horizontal-stretch: 1;
+                    options: PlaylistDoc.section-names;
+                    current-index <=> PlaylistDoc.e-section;
+                    enabled: !PlaylistDoc.e-included;
+                }
+            }
+
+            Row {
+                label: "Description";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.e-description;
+                    placeholder: "Optional";
+                }
+            }
+
+            Row {
+                label: "Tags";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.e-tags;
+                    placeholder: "Comma separated";
+                }
+            }
+        }
+
+        if PlaylistDoc.entry-page == 1: Page {
+            Row {
+                label: "File or link";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.e-source;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    SmallButton {
+                        text: "Browse...";
+                        clicked => { PlaylistDoc.browse-entry(1); }
+                    }
+                }
+            }
+
+            Hint {
+                text: "Saved relative to the playlist file when it's in the same folder or below.";
+            }
+
+            Heading { text: "MIRRORS"; }
+
+            Hint {
+                text: "Tried in order when the file or link above can't be played.";
+            }
+
+            for mirror[index] in PlaylistDoc.e-mirrors: HorizontalLayout {
+                spacing: 6px;
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> mirror;
+                    placeholder: "https://";
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    RemoveButton {
+                        clicked => { PlaylistDoc.remove-mirror(index); }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: start;
+
+                SmallButton {
+                    text: "Add mirror";
+                    clicked => { PlaylistDoc.add-mirror(); }
+                }
+            }
+
+            Heading { text: "WEB REQUESTS"; }
+
+            Checkbox {
+                text: "Use the playlist's headers";
+                checked <=> PlaylistDoc.e-playlist-headers;
+            }
+
+            HeaderList {
+                headers: PlaylistDoc.e-headers;
+                remove(index) => { PlaylistDoc.remove-entry-header(index); }
+                add => { PlaylistDoc.add-entry-header(); }
+            }
+        }
+
+        if PlaylistDoc.entry-page == 2: Page {
+            Heading { text: "PLAY PART"; }
+
+            Row {
+                label: "From";
+
+                TimeField {
+                    text <=> PlaylistDoc.e-start;
+                    placeholder: "0:00";
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    SmallButton {
+                        text: "Use current";
+                        clicked => { PlaylistDoc.use-position(0); }
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            Row {
+                label: "To";
+
+                TimeField {
+                    text <=> PlaylistDoc.e-end;
+                    placeholder: "End";
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    SmallButton {
+                        text: "Use current";
+                        clicked => { PlaylistDoc.use-position(1); }
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            Heading { text: "SKIP"; }
+
+            Hint {
+                text: "Jumps over these parts, like an opening, once per play. Times like 1:20 or 80.";
+            }
+
+            for skip[index] in PlaylistDoc.e-skips: HorizontalLayout {
+                spacing: 6px;
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> skip.name;
+                    placeholder: "Name";
+                }
+
+                TimeField {
+                    text <=> skip.from;
+                    placeholder: "From";
+                }
+
+                Unit { text: "to"; }
+
+                TimeField {
+                    text <=> skip.to;
+                    placeholder: "To";
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    RemoveButton {
+                        clicked => { PlaylistDoc.remove-skip(index); }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+
+                SmallButton {
+                    text: "Add range";
+                    clicked => { PlaylistDoc.add-skip(); }
+                }
+
+                SmallButton {
+                    text: "Copy to the whole section";
+                    enabled: !PlaylistDoc.e-included;
+                    clicked => { PlaylistDoc.copy-skips(); }
+                }
+            }
+
+            Heading { text: "VOLUME"; }
+
+            Row {
+                label: "Adjust by";
+
+                TextField {
+                    width: 80px;
+                    text <=> PlaylistDoc.e-volume;
+                    placeholder: "0";
+                    numeric: true;
+                    optional: true;
+                }
+
+                Unit { text: "dB"; }
+                Rectangle { horizontal-stretch: 1; }
+            }
+        }
+
+        if PlaylistDoc.entry-page == 3: Page {
+            Heading { text: "EXTRA SUBTITLES"; }
+
+            Hint {
+                text: "The marked one is turned on when the entry plays.";
+            }
+
+            for subtitle[index] in PlaylistDoc.e-subtitles: HorizontalLayout {
+                spacing: 8px;
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        width: 16px;
+                        height: 16px;
+                        border-radius: 8px;
+                        border-width: subtitle.default ? 5px : 1.5px;
+                        border-color: subtitle.default ? Theme.accent : default-area.has-hover ? Theme.text : Theme.muted;
+                        animate border-color, border-width { duration: Theme.hover-duration; }
+
+                        default-area := Clickable {
+                            clicked => { PlaylistDoc.set-default-subtitle(index); }
+                        }
+                    }
+                }
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: subtitle.source;
+                    color: Theme.text;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                TextField {
+                    width: 90px;
+                    text <=> subtitle.language;
+                    placeholder: "Language";
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    RemoveButton {
+                        clicked => { PlaylistDoc.remove-subtitle(index); }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: start;
+
+                SmallButton {
+                    text: "Add subtitles...";
+                    clicked => { PlaylistDoc.browse-entry(3); }
+                }
+            }
+
+            Heading { text: "PREFERRED TRACKS"; }
+
+            Row {
+                label: "Audio language";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.e-audio-language;
+                    placeholder: "For example ja, or jpn,ja";
+                }
+            }
+
+            Row {
+                label: "Subtitle language";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.e-subtitle-language;
+                    placeholder: "For example en";
+                }
+            }
+
+            Row {
+                label: "Extra audio";
+
+                TextField {
+                    horizontal-stretch: 1;
+                    text <=> PlaylistDoc.e-extra-audio;
+                    placeholder: "None";
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    SmallButton {
+                        text: "Browse...";
+                        clicked => { PlaylistDoc.browse-entry(2); }
+                    }
+                }
+            }
+        }
+    }
+
+    Footer {
+        VerticalLayout {
+            alignment: center;
+
+            SmallButton {
+                text: "Previous";
+                enabled: PlaylistDoc.e-index > 0;
+                clicked => { PlaylistDoc.entry-step(-1); }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            SmallButton {
+                text: "Next";
+                enabled: PlaylistDoc.e-index < PlaylistDoc.e-count - 1;
+                clicked => { PlaylistDoc.entry-step(1); }
+            }
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: PlaylistDoc.e-message;
+            color: Theme.muted;
+            font-size: 11px;
+            vertical-alignment: center;
+            wrap: word-wrap;
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            TextButton {
+                text: "Cancel";
+                ghost: true;
+                clicked => { root.close(); }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            TextButton {
+                width: 80px;
+                text: "Save";
+                primary: true;
+                enabled: !PlaylistDoc.e-included;
+                clicked => {
+                    PlaylistDoc.entry-save();
+                    Panels.focus-requests += 1;
+                }
+            }
+        }
+    }
+}
+
+export component SavePrompt inherits DialogFrame {
+    title: PlaylistDoc.prompt-title;
+    box-width: 420px;
+    box-height: 160px;
+    dismiss => {
+        PlaylistDoc.prompt-answer(0);
+        Panels.focus-requests += 1;
+    }
+
+    Rectangle {
+        vertical-stretch: 1;
+
+        Hint {
+            x: 16px;
+            width: parent.width - 32px;
+            text: PlaylistDoc.prompt-text;
+            vertical-alignment: center;
+        }
+    }
+
+    Footer {
+        Rectangle { horizontal-stretch: 1; }
+
+        VerticalLayout {
+            alignment: center;
+
+            TextButton {
+                text: "Cancel";
+                ghost: true;
+                clicked => {
+                    PlaylistDoc.prompt-answer(0);
+                    Panels.focus-requests += 1;
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            TextButton {
+                text: "Don't save";
+                clicked => {
+                    PlaylistDoc.prompt-answer(1);
+                    Panels.focus-requests += 1;
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            TextButton {
+                width: 80px;
+                text: "Save";
+                primary: true;
+                clicked => {
+                    PlaylistDoc.prompt-answer(2);
+                    Panels.focus-requests += 1;
+                }
+            }
+        }
+    }
+}

@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { Player, WindowControls, Panels, Settings, Updates, Phase } from "state.slint";
+import { Player, WindowControls, Panels, Settings, Updates, Phase, PlaylistDoc } from "state.slint";
 import { TitleBar } from "title-bar.slint";
 import { ControlBar } from "control-bar.slint";
 import { TracksMenu } from "tracks-menu.slint";
@@ -13,12 +13,13 @@ import { FailureScreen } from "failure-screen.slint";
 import { AudioView, AudioLayout } from "audio-view.slint";
 import { EndOverlay } from "end-overlay.slint";
 import { LinkBox } from "link-box.slint";
+import { PlaylistDetailsDialog, EntryDialog, SavePrompt } from "playlist-dialogs.slint";
 import { UpdateBanner } from "update-banner.slint";
 import { ResizeFrame } from "components/resize-frame.slint";
 
 export { Theme } from "theme.slint";
 export { RecorderWindow } from "recorder-window.slint";
-export { Player, WindowControls, Panels, Recorder, Settings, Updates, UpdatePhase, ResizeEdge, Phase, FailureKind, DragState, TrackItem, PlaylistItem, LoadedRange, ChapterItem, ShortcutItem, ThemeProfiles, ThemeItem, ColorText, ParsedColor, CoverState } from "state.slint";
+export { Player, WindowControls, Panels, Recorder, Settings, Updates, UpdatePhase, ResizeEdge, Phase, FailureKind, DragState, TrackItem, PlaylistItem, LoadedRange, ChapterItem, ShortcutItem, ThemeProfiles, ThemeItem, ColorText, ParsedColor, CoverState, PlaylistDoc, HeaderItem, SkipItem, SubtitleItem, SectionItem } from "state.slint";
 export component AppWindow inherits Window {
     title: Player.media-title != "" ? Player.media-title : "Rona";
     no-frame: true;
@@ -114,6 +115,18 @@ export component AppWindow inherits Window {
             }
         }
         key-pressed(event) => {
+            if (event.text == Key.Escape && PlaylistDoc.prompt-open) {
+                PlaylistDoc.prompt-answer(0);
+                return accept;
+            }
+            if (event.text == Key.Escape && PlaylistDoc.entry-open) {
+                PlaylistDoc.entry-cancel();
+                return accept;
+            }
+            if (event.text == Key.Escape && PlaylistDoc.details-open) {
+                PlaylistDoc.details-cancel();
+                return accept;
+            }
             if (event.text == Key.Escape && Panels.settings-open) {
                 Panels.settings-open = false;
                 return accept;
@@ -141,6 +154,14 @@ export component AppWindow inherits Window {
                 }
                 if (event.text == "z" || event.text == "Z") {
                     Player.undo-remove();
+                    return accept;
+                }
+                if ((event.text == "s" || event.text == "S") && Player.playlist-count > 0) {
+                    if (event.modifiers.shift) {
+                        PlaylistDoc.save-as();
+                    } else {
+                        PlaylistDoc.save();
+                    }
                     return accept;
                 }
             }
@@ -316,6 +337,37 @@ export component AppWindow inherits Window {
         width: root.width;
         height: root.video-height;
         opacity: root.settings-fade;
+    }
+
+    property <float> details-fade: PlaylistDoc.details-open ? 1 : 0;
+    animate details-fade { duration: Theme.fade-duration; easing: ease-out; }
+    property <float> entry-fade: PlaylistDoc.entry-open ? 1 : 0;
+    animate entry-fade { duration: Theme.fade-duration; easing: ease-out; }
+    property <float> prompt-fade: PlaylistDoc.prompt-open ? 1 : 0;
+    animate prompt-fade { duration: Theme.fade-duration; easing: ease-out; }
+
+    if PlaylistDoc.details-open || root.details-fade > 0: PlaylistDetailsDialog {
+        x: 0;
+        y: root.video-y;
+        width: root.width;
+        height: root.video-height;
+        opacity: root.details-fade;
+    }
+
+    if PlaylistDoc.entry-open || root.entry-fade > 0: EntryDialog {
+        x: 0;
+        y: root.video-y;
+        width: root.width;
+        height: root.video-height;
+        opacity: root.entry-fade;
+    }
+
+    if PlaylistDoc.prompt-open || root.prompt-fade > 0: SavePrompt {
+        x: 0;
+        y: root.video-y;
+        width: root.width;
+        height: root.video-height;
+        opacity: root.prompt-fade;
     }
 
     DropOverlay {

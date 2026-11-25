@@ -26,20 +26,188 @@ export struct LoadedRange {
 
 export enum CoverState { missing, loading, shown }
 
-// In the list's own order, which shuffle never changes.
+// A row of the playlist panel, in the list's own order, which shuffle never changes. Rows are entries or the
+// headings of a playlist file's sections.
 export struct PlaylistItem {
+    heading: bool,
+    heading-title: string,
+    heading-count: string,
+    collapsed: bool,
+    // The entry's place in the list, -1 for a heading.
+    entry: int,
+    // Where the row starts in the list's content, worked out in Rust since headings are shorter than entries.
+    top: length,
+    number: string,
     title: string,
+    // The episode, or the artist for audio.
+    detail: string,
+    duration: string,
     is-audio: bool,
-    artist: string,
-    // Audio files show their cover, read in the background.
+    // A video with a 16:9 thumbnail tile.
+    wide: bool,
+    // Audio files show their cover, read in the background, and entries their thumbnail.
     cover-state: CoverState,
     cover: image,
+    // How far in the saved resume position is, 0 for none.
+    progress: float,
+    problem: string,
+    problem-warning: bool,
     current: bool,
     failed: bool,
     // Already played in this pass of a shuffled playlist.
     played: bool,
     // Plays after the current one.
     next: bool,
+}
+
+export struct HeaderItem {
+    name: string,
+    value: string,
+}
+
+export struct SkipItem {
+    name: string,
+    from: string,
+    to: string,
+}
+
+export struct SubtitleItem {
+    source: string,
+    language: string,
+    default: bool,
+}
+
+export struct SectionItem {
+    title: string,
+    number: string,
+    include: string,
+}
+
+// The playlist file behind the open list, its panel card, and the details dialogs.
+export global PlaylistDoc {
+    in property <bool> has-document;
+    in property <string> title;
+    in property <string> card-title;
+    in property <string> card-subtitle;
+    in property <string> file-name;
+    in property <bool> dirty;
+    in property <bool> can-save-in-place;
+    in property <bool> autosave;
+    in property <bool> square-cover;
+    in property <bool> has-cover;
+    in property <image> cover;
+
+    callback save();
+    callback save-as();
+    callback toggle-autosave();
+    callback export-m3u();
+    callback show-in-folder();
+    callback add-files();
+    callback add-link();
+    callback find-file(int);
+
+    // Playlist details. Type is 0 series, 1 music, 2 other.
+    in-out property <bool> details-open;
+    in-out property <int> details-page;
+    in-out property <int> type;
+    in-out property <string> d-title;
+    in-out property <string> d-series;
+    in-out property <string> d-artist;
+    in-out property <string> d-album;
+    in-out property <string> d-year;
+    in-out property <string> d-description;
+    in-out property <string> d-link;
+    in-out property <string> d-author;
+    in-out property <string> d-cover;
+    in-out property <string> d-background;
+    in property <bool> d-has-cover;
+    in property <image> d-cover-image;
+    // 0 as Rona remembers it, then off and on, or off, once and forever for repeat.
+    in-out property <int> d-shuffle;
+    in-out property <int> d-repeat;
+    in-out property <string> d-start;
+    in-out property <bool> d-autosave;
+    in-out property <string> d-user-agent;
+    in-out property <string> d-referer;
+    in property <[HeaderItem]> d-headers;
+    in property <[SectionItem]> d-sections;
+    in property <string> d-footer;
+
+    callback open-details();
+    callback details-save();
+    callback details-cancel();
+    // 0 cover, 1 background.
+    callback browse-image(int);
+    callback preview-cover(string);
+    callback add-header();
+    callback remove-header(int);
+    callback add-section();
+    callback remove-section(int);
+    callback move-section(int, int);
+
+    // Entry details, for the entry at e-index in the list.
+    in-out property <bool> entry-open;
+    in-out property <int> entry-page;
+    in property <int> e-index;
+    in property <int> e-count;
+    in property <bool> e-included;
+    in-out property <string> e-title;
+    in-out property <string> e-season;
+    in-out property <string> e-episode;
+    in-out property <string> e-absolute;
+    in-out property <string> e-aired;
+    in-out property <string> e-artist;
+    in-out property <string> e-album;
+    in-out property <string> e-track;
+    in-out property <string> e-disc;
+    in-out property <string> e-year;
+    in-out property <string> e-description;
+    in-out property <string> e-tags;
+    in-out property <string> e-thumbnail;
+    in property <bool> e-has-thumbnail;
+    in property <image> e-thumbnail-image;
+    in property <[string]> section-names;
+    in-out property <int> e-section;
+    in-out property <string> e-source;
+    in property <[string]> e-mirrors;
+    in-out property <bool> e-playlist-headers;
+    in property <[HeaderItem]> e-headers;
+    in-out property <string> e-start;
+    in-out property <string> e-end;
+    in property <[SkipItem]> e-skips;
+    in-out property <string> e-volume;
+    in property <[SubtitleItem]> e-subtitles;
+    in-out property <string> e-audio-language;
+    in-out property <string> e-subtitle-language;
+    in-out property <string> e-extra-audio;
+    in property <string> e-message;
+
+    callback edit-entry(int);
+    callback entry-save();
+    callback entry-cancel();
+    // Saves and moves to the entry before or after.
+    callback entry-step(int);
+    // 0 thumbnail, 1 source, 2 extra audio, 3 subtitles.
+    callback browse-entry(int);
+    callback preview-thumbnail(string);
+    callback add-mirror();
+    callback remove-mirror(int);
+    callback add-entry-header();
+    callback remove-entry-header(int);
+    callback add-skip();
+    callback remove-skip(int);
+    callback copy-skips();
+    // 0 start, 1 end, from the playing position.
+    callback use-position(int);
+    callback set-default-subtitle(int);
+    callback remove-subtitle(int);
+    pure callback valid-time(string) -> bool;
+
+    // Asked before an edited playlist is replaced or the window closes. 0 cancel, 1 don't save, 2 save.
+    in-out property <bool> prompt-open;
+    in property <string> prompt-title;
+    in property <string> prompt-text;
+    callback prompt-answer(int);
 }
 
 export struct ShortcutItem {
@@ -246,6 +414,8 @@ export global Player {
     in property <bool> subtitles-off: true;
     in property <bool> subtitles-hidden;
     in property <[PlaylistItem]> playlist;
+    // Entries in the playlist, also the ones in folded sections.
+    in property <int> playlist-count;
     // Rows have a cover column, when any entry is an audio file.
     in property <bool> playlist-covers;
     in property <bool> shuffle;
@@ -316,6 +486,12 @@ export global Player {
     callback remove-entry(int);
     // Moves an entry so it lands before the one at the second index, or at the end when that is the length.
     callback move-entry(int, int);
+    // Moves the entry in the first row to before the second row, joining the section that row is in.
+    callback move-row(int, int);
+    pure callback row-at(length) -> int;
+    // The next entry row in a direction, skipping headings.
+    pure callback step-row(int, int) -> int;
+    callback toggle-section(int);
     callback play-entry-next(int);
     callback undo-remove();
     callback toggle-shuffle();

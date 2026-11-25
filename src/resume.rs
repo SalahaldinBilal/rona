@@ -228,6 +228,15 @@ impl Resume {
     }
 }
 
+/// The position saved for a file, for the playlist's resume bars.
+pub fn saved_start(path: &str) -> Option<f64> {
+    let resume = RESUME.with(|slot| slot.borrow().clone())?;
+    let key = key_of(path);
+    let store = lock(&resume.store);
+    let entry = store.entries.iter().find(|entry| entry.key == key)?;
+    entry.options.iter().find(|(name, _)| name == "start").and_then(|(_, value)| value.parse().ok())
+}
+
 /// Local paths are compared as absolute paths, and without case on Windows. Links keep their full URL.
 pub fn key_of(path: &str) -> String {
     let path = path.strip_prefix(http_cache::PROTOCOL).and_then(|rest| rest.strip_prefix("://")).unwrap_or(path);

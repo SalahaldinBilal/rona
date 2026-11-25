@@ -12,12 +12,126 @@ use crate::http_cache::{self, ConnectionState};
 use crate::logging::{debug, info, warn};
 use crate::media::{self, FileCheck, LinkCheck};
 use crate::mpv::Mpv;
-use crate::{AppWindow, DragState, FailureKind, Osd, Panels, Phase, Player, forget_audio_view, log_error, playlist};
+use crate::playlist::{Document, Meta, Opened, Problem};
+use crate::playlist_file;
+use crate::{
+    AppWindow, DragState, FailureKind, Osd, Panels, Phase, Player, forget_audio_view, log_error, playlist, playlist_edit,
+};
 
 #[derive(Clone, Debug)]
 enum Source {
     File(PathBuf),
     Link(String),
+    Playlist(PlaylistSource),
+}
+
+#[derive(Clone, Debug)]
+enum PlaylistSource {
+    File(PathBuf),
+    Link(String),
+    // A whole playlist given as text, with its paths already absolute.
+    Text(String),
+}
+
+fn file_source(path: PathBuf) -> Source {
+    if playlist_file::is_playlist_name(&path.to_string_lossy()) {
+        Source::Playlist(PlaylistSource::File(path))
+    } else {
+        Source::File(path)
+    }
+}
+
+fn link_source(url: String) -> Source {
+    if playlist_file::is_playlist_name(&url) { Source::Playlist(PlaylistSource::Link(url)) } else { Source::Link(url) }
+}
+
+// The file name mpv gets for a source.
+fn mpv_name(source: &Source) -> String {
+    match source {
+        Source::File(path) => std::path::absolute(path).unwrap_or_else(|_| path.clone()).to_string_lossy().into_owned(),
+        Source::Link(url) => http_cache::wrap_url(url),
+        Source::Playlist(_) => String::new(),
+    }
+}
+
+fn mpv_name_of(source: &str) -> String {
+    if source.contains("://") { http_cache::wrap_url(source) } else { source.to_string() }
+}
+
+struct PlaylistRead {
+    opened: Opened,
+    start: usize,
+    // Shown once the list opens, like local files left out of a playlist from the web.
+    notes: Vec<String>,
+}
+
+// Blocks on disk and network, so it runs on its own thread. A single playlist keeps its file, anything mixed
+// with it opens as a plain list.
+fn read_playlists(sources: Vec<Source>) -> Result<PlaylistRead, String> {
+    let single = sources.len() == 1;
+    let mut metas = Vec::new();
+    let mut notes = Vec::new();
+    let mut document = None;
+    let mut start = 0;
+    let mut plain = Vec::new();
+    let flush_plain = |plain: &mut Vec<Source>, metas: &mut Vec<(String, Meta)>| {
+        for checked in check_sources(std::mem::take(plain)) {
+            if let Some(source) = checked.playable() {
+                let name = mpv_name(&source);
+                let meta = Meta::plain(match &source {
+                    Source::Link(url) => url.clone(),
+                    _ => name.clone(),
+                });
+                metas.push((name, meta));
+            }
+        }
+    };
+    for source in sources {
+        let Source::Playlist(playlist) = source else {
+            plain.push(source);
+            continue;
+        };
+        flush_plain(&mut plain, &mut metas);
+        let loaded = match &playlist {
+            PlaylistSource::File(path) => playlist_file::read_path(path),
+            PlaylistSource::Link(url) => playlist_file::read_link(url),
+            PlaylistSource::Text(text) => {
+                playlist_file::read_text(text, &std::env::current_dir().unwrap_or_default())
+            }
+        }?;
+        for warning in &loaded.warnings {
+            warn!("{warning}");
+        }
+        notes.extend(loaded.warnings.iter().cloned());
+        if loaded.skipped_local > 0 {
+            notes.push(format!("Skipped {} local files in a playlist from the web", loaded.skipped_local));
+        }
+        let (enabled, disabled): (Vec<_>, Vec<_>) = loaded.items.into_iter().partition(|item| !item.entry.disabled);
+        for item in enabled {
+            let problem = problem_of(&item.entry);
+            let name = mpv_name_of(&item.entry.source);
+            metas.push((name, Meta::from_item(item, problem)));
+        }
+        if single {
+            start = loaded.file.playback.start.unwrap_or(0);
+            document = Some(Document { file: loaded.file, origin: loaded.origin, disabled, dirty: false });
+        }
+    }
+    flush_plain(&mut plain, &mut metas);
+    Ok(PlaylistRead { opened: Opened { document, metas }, start, notes })
+}
+
+fn problem_of(entry: &playlist_file::Entry) -> Problem {
+    if entry.source.contains("://") {
+        return Problem::None;
+    }
+    if !Path::new(&entry.source).exists() {
+        return Problem::Missing;
+    }
+    match (entry.check, playlist_file::file_check(&entry.source)) {
+        (Some(saved), Some(now)) if saved != now => Problem::Changed,
+        _ => Problem::None,
+    }
 }
 
 enum Checked {
@@ -64,6 +178,8 @@ fn check_sources(sources: Vec<Source>) -> Vec<Checked> {
                     Checked::File(path, check)
                 }
                 Pending::Ready(Source::Link(url)) => Checked::Link(url, LinkCheck::Playable),
+                // Playlists are read before the media checks, so one here was given where only media fits.
+                Pending::Ready(Source::Playlist(_)) => Checked::File(PathBuf::new(), FileCheck::NotMedia),
                 Pending::Checking(check) => check.join().expect("the link check panicked"),
             })
             .collect()
@@ -93,6 +209,8 @@ fn file_check_text(check: &FileCheck) -> String {
 }
 
 static FAILED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+// The link box was opened by "Add link", so its link joins the open list.
+static ADDING_LINK: Mutex<bool> = Mutex::new(false);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -111,39 +229,46 @@ pub struct Loader(Rc<RefCell<LoaderState>>);
 struct LoaderState {
     ready: bool,
     pending: Vec<String>,
+    start: usize,
 }
 
 impl Loader {
     pub fn render_ready(&self, mpv: &Mpv) {
-        let pending = {
+        let (pending, start) = {
             let mut state = self.0.borrow_mut();
             state.ready = true;
-            std::mem::take(&mut state.pending)
+            (std::mem::take(&mut state.pending), state.start)
         };
         if !pending.is_empty() {
             debug!("video is ready, loading what was waiting for it");
         }
-        send_loadfile(mpv, &pending);
+        send_loadfile(mpv, &pending, start);
     }
 
-    fn load(&self, mpv: &Mpv, paths: Vec<String>) {
+    fn load(&self, mpv: &Mpv, paths: Vec<String>, start: usize) {
         let mut state = self.0.borrow_mut();
         if state.ready {
             drop(state);
-            send_loadfile(mpv, &paths);
+            send_loadfile(mpv, &paths, start);
         } else {
             debug!("holding {} files until video is ready", paths.len());
             state.pending = paths;
+            state.start = start;
         }
     }
 }
 
-fn send_loadfile(mpv: &Mpv, paths: &[String]) {
-    if !paths.is_empty() {
-        info!("loading {} files, first {}", paths.len(), paths[0]);
+// The entry to start at replaces what plays, and the others go around it, so mpv never starts the first one.
+fn send_loadfile(mpv: &Mpv, paths: &[String], start: usize) {
+    let Some(first) = paths.get(start).or(paths.first()) else { return };
+    let start = if start < paths.len() { start } else { 0 };
+    info!("loading {} files, starting at {} ({first})", paths.len(), start + 1);
+    log_error(mpv.command(&["loadfile", first, "replace"]));
+    for (index, path) in paths.iter().enumerate().take(start) {
+        log_error(mpv.command(&["loadfile", path, "insert-at", &index.to_string()]));
     }
-    for (index, path) in paths.iter().enumerate() {
-        log_error(mpv.command(&["loadfile", path, if index == 0 { "replace" } else { "append" }]));
+    for path in paths.iter().skip(start + 1) {
+        log_error(mpv.command(&["loadfile", path, "append"]));
     }
 }
 
@@ -156,6 +281,8 @@ struct Opener {
     generation: u64,
     last_request: Vec<Source>,
     restore_start: bool,
+    // An open held back while the user decides whether to save the edited playlist it would replace.
+    held: Option<(Vec<Source>, bool, usize)>,
 }
 
 thread_local! {
@@ -178,12 +305,16 @@ pub fn wire(app: &AppWindow, mpv: &Mpv, osd: &Osd, loader: Loader) {
         generation: 0,
         last_request: Vec::new(),
         restore_start: false,
+        held: None,
     };
     OPENER.with(|slot| *slot.borrow_mut() = Some(Rc::new(RefCell::new(opener))));
 
     let player = app.global::<Player>();
     player.on_open_file(|| with_opener(Opener::pick_files));
-    player.on_show_link_box(|| with_opener(Opener::show_link_box));
+    player.on_show_link_box(|| {
+        *lock(&ADDING_LINK) = false;
+        with_opener(Opener::show_link_box);
+    });
     player.on_paste_link(|| with_opener(Opener::paste));
     player.on_open_link(|text| {
         let mut error = String::new();
@@ -198,11 +329,15 @@ pub fn wire(app: &AppWindow, mpv: &Mpv, osd: &Osd, loader: Loader) {
 }
 
 fn is_link_argument(argument: &str) -> bool {
-    argument.contains("://")
+    argument.contains("://") && !playlist_file::is_playlist_text(argument)
 }
 
-/// Another launch hands its arguments over from its own working folder, so relative paths are resolved first.
+/// Another launch hands its arguments over from its own working folder, so relative paths are resolved first,
+/// also the ones inside a playlist given as text.
 pub fn absolute_argument(argument: String) -> String {
+    if playlist_file::is_playlist_text(&argument) {
+        return playlist_file::absolutize_text(&argument, &std::env::current_dir().unwrap_or_default());
+    }
     if is_link_argument(&argument) {
         return argument;
     }
@@ -238,12 +373,16 @@ pub fn open_arguments(arguments: &[String]) {
         let mut bad_link = None;
         let mut skipped = 0;
         for argument in arguments {
+            if playlist_file::is_playlist_text(argument) {
+                sources.push(Source::Playlist(PlaylistSource::Text(argument.clone())));
+                continue;
+            }
             if !is_link_argument(argument) {
-                sources.push(Source::File(PathBuf::from(argument)));
+                sources.push(file_source(PathBuf::from(argument)));
                 continue;
             }
             match media::parse_link(argument) {
-                Ok(url) => sources.push(Source::Link(url)),
+                Ok(url) => sources.push(link_source(url)),
                 Err(err) => {
                     info!("skipping argument {argument}: {}", err.message());
                     skipped += 1;
@@ -259,6 +398,33 @@ pub fn open_arguments(arguments: &[String]) {
         }
         opener.open_counting(sources, false, skipped);
     });
+}
+
+/// The save prompt was answered. An open waiting on it goes ahead unless it was cancelled.
+pub fn release_held(proceed: bool) {
+    with_opener(|opener| opener.release_held(proceed));
+}
+
+pub fn add_files() {
+    // The native dialog blocks its thread, which must not be the UI thread that draws the video.
+    std::thread::spawn(|| {
+        let Some(files) = rfd::FileDialog::new()
+            .set_title("Add to the playlist")
+            .add_filter("Video and audio", media::dialog_extensions().as_slice())
+            .add_filter("All files", &["*"])
+            .pick_files()
+        else {
+            return;
+        };
+        let sources: Vec<Source> = files.into_iter().map(Source::File).collect();
+        let _ = slint::invoke_from_event_loop(move || with_opener(|opener| opener.add(sources)));
+    });
+}
+
+/// Opens the link box for a link that joins the open list.
+pub fn add_link() {
+    *lock(&ADDING_LINK) = true;
+    with_opener(Opener::show_link_box);
 }
 
 /// mpv ended a file with an error. With more entries after it, mpv moves on by itself.
@@ -284,10 +450,28 @@ impl Opener {
         if sources.is_empty() {
             return;
         }
+        if playlist::has_unsaved_changes() {
+            info!("holding an open request until the edited playlist is saved or let go");
+            self.held = Some((sources, quiet, skipped));
+            playlist_edit::ask_to_save(playlist_edit::Then::Open);
+            return;
+        }
         self.generation += 1;
         let generation = self.generation;
         info!("open request {generation}: {sources:?}{}", if quiet { ", quiet" } else { "" });
         self.last_request = sources.clone();
+        if sources.iter().any(|source| matches!(source, Source::Playlist(_))) {
+            if let Some(Source::Playlist(PlaylistSource::Link(url))) = sources.first() {
+                self.show_checking(url);
+            }
+            std::thread::spawn(move || {
+                let read = read_playlists(sources);
+                let _ = slint::invoke_from_event_loop(move || {
+                    with_opener(|opener| opener.playlists_read(generation, read, quiet));
+                });
+            });
+            return;
+        }
         if let [Source::Link(url)] = sources.as_slice() {
             self.show_skipped(skipped, quiet);
             if media::link_has_media_extension(url) {
@@ -332,6 +516,78 @@ impl Opener {
             Some(Checked::Link(url, result)) => self.link_failed(&url, result),
             None => {}
         }
+    }
+
+    fn playlists_read(&mut self, generation: u64, read: Result<PlaylistRead, String>, quiet: bool) {
+        if generation != self.generation {
+            debug!("dropping the playlist read of open request {generation}, a newer one replaced it");
+            return;
+        }
+        let is_link = matches!(self.last_request.first(), Some(Source::Playlist(PlaylistSource::Link(_))));
+        let name = match self.last_request.first() {
+            Some(Source::Playlist(PlaylistSource::File(path))) => file_name(path),
+            Some(Source::Playlist(PlaylistSource::Link(url))) => media::link_host(url),
+            _ => "Playlist".into(),
+        };
+        match read {
+            Err(detail) => {
+                if !quiet {
+                    self.fail(FailureKind::Unsupported, "Can't open this playlist", &detail, &name, is_link);
+                }
+            }
+            Ok(read) if read.opened.metas.is_empty() => {
+                if !quiet {
+                    let detail = "There's nothing in it that can be played.";
+                    self.fail(FailureKind::Unsupported, "This playlist is empty", detail, &name, is_link);
+                }
+            }
+            Ok(read) => {
+                if let Some(note) = read.notes.first() {
+                    self.osd.show(note.clone());
+                }
+                self.load_opened(read.opened, read.start);
+            }
+        }
+    }
+
+    /// Lets go of an open held for the save prompt, opening it unless the user cancelled.
+    fn release_held(&mut self, proceed: bool) {
+        let Some((sources, quiet, skipped)) = self.held.take() else { return };
+        if proceed {
+            playlist::forget_changes();
+            self.open_counting(sources, quiet, skipped);
+        }
+    }
+
+    // Adds to the open list instead of replacing it. With nothing open, it opens.
+    fn add(&mut self, sources: Vec<Source>) {
+        if sources.is_empty() {
+            return;
+        }
+        let Some(app) = self.app.upgrade() else { return };
+        if matches!(app.global::<Player>().get_phase(), Phase::Idle | Phase::Failed) || playlist::is_empty() {
+            self.open(sources, false);
+            return;
+        }
+        info!("adding to the playlist: {sources:?}");
+        std::thread::spawn(move || {
+            let checks = check_sources(sources);
+            let _ = slint::invoke_from_event_loop(move || {
+                with_opener(|opener| {
+                    let playable: Vec<Source> = checks.iter().filter_map(Checked::playable).collect();
+                    let left_out = checks.len() - playable.len();
+                    if left_out > 0 {
+                        opener.osd.show(format!("Skipped {left_out} that can't be played"));
+                    }
+                    for source in &playable {
+                        log_error(opener.mpv.command(&["loadfile", &mpv_name(source), "append"]));
+                    }
+                    if !playable.is_empty() {
+                        opener.osd.show(if playable.len() == 1 { "Added 1 entry".into() } else { format!("Added {} entries", playable.len()) });
+                    }
+                });
+            });
+        });
     }
 
     fn show_skipped(&self, skipped: usize, quiet: bool) {
@@ -424,6 +680,10 @@ impl Opener {
     }
 
     fn load_failed(&mut self, path: &str, has_next: bool) {
+        if playlist::try_mirror(path) {
+            self.osd.show("Couldn't play it, trying a mirror");
+            return;
+        }
         lock(&FAILED).push(path.to_string());
         let info = media::describe_source(path);
         let open_error = if info.is_link { http_cache::take_open_error() } else { None };
@@ -449,18 +709,32 @@ impl Opener {
         }
     }
 
+    // Absolute, so a file opened from the command line has the same resume key as from the dialog.
     fn load(&mut self, sources: &[Source]) {
-        let Some(app) = self.app.upgrade() else { return };
-        lock(&FAILED).clear();
-        // Absolute, so a file opened from the command line has the same resume key as from the dialog.
-        let paths: Vec<String> = sources
+        let metas = sources
             .iter()
-            .map(|source| match source {
-                Source::File(path) => std::path::absolute(path).unwrap_or_else(|_| path.clone()).to_string_lossy().into_owned(),
-                Source::Link(url) => http_cache::wrap_url(url),
+            .filter(|source| !matches!(source, Source::Playlist(_)))
+            .map(|source| {
+                let meta = Meta::plain(match source {
+                    Source::Link(url) => url.clone(),
+                    _ => mpv_name(source),
+                });
+                (mpv_name(source), meta)
             })
             .collect();
-        let Some(first) = paths.first() else { return };
+        self.load_opened(Opened { document: None, metas }, 0);
+    }
+
+    fn load_opened(&mut self, opened: Opened, start: usize) {
+        let Some(app) = self.app.upgrade() else { return };
+        lock(&FAILED).clear();
+        http_cache::clear_headers();
+        for (name, meta) in &opened.metas {
+            playlist::add_headers(name, &meta.headers);
+        }
+        let paths: Vec<String> = opened.metas.iter().map(|(name, _)| name.clone()).collect();
+        let start = if start < paths.len() { start } else { 0 };
+        let Some(first) = paths.get(start) else { return };
         let info = media::describe_source(first);
         let player = app.global::<Player>();
         player.set_opening_name(info.name.as_str().into());
@@ -470,16 +744,19 @@ impl Opener {
         player.set_ended(false);
         player.set_phase(Phase::Opening);
         log_error(self.mpv.command(&["set", "pause", "no"]));
-        playlist::starting(&paths);
-        self.loader.load(&self.mpv, paths);
+        playlist::starting(&paths, opened);
+        self.loader.load(&self.mpv, paths, start);
     }
 
     fn pick_files(&mut self) {
         // The native dialog blocks its thread, which must not be the UI thread that draws the video.
         std::thread::spawn(|| {
             debug!("file dialog opened");
+            let mut extensions = media::dialog_extensions();
+            extensions.push(playlist_file::EXTENSION);
             let Some(files) = rfd::FileDialog::new()
-                .add_filter("Video and audio", media::dialog_extensions().as_slice())
+                .add_filter("Video, audio and playlists", extensions.as_slice())
+                .add_filter("Playlists", &[playlist_file::EXTENSION])
                 .add_filter("All files", &["*"])
                 .pick_files()
             else {
@@ -487,7 +764,7 @@ impl Opener {
                 return;
             };
             info!("picked {} files in the dialog", files.len());
-            let sources: Vec<Source> = files.into_iter().map(Source::File).collect();
+            let sources: Vec<Source> = files.into_iter().map(file_source).collect();
             let _ = slint::invoke_from_event_loop(move || with_opener(|opener| opener.open(sources, false)));
         });
     }
@@ -506,10 +783,16 @@ impl Opener {
         match media::parse_link(text) {
             Ok(url) => {
                 info!("link box: {url}");
-                if let Some(app) = self.app.upgrade() {
-                    app.global::<Panels>().set_link_open(false);
+                let adding = self.app.upgrade().is_some_and(|app| {
+                    let panels = app.global::<Panels>();
+                    panels.set_link_open(false);
+                    std::mem::take(&mut *lock(&ADDING_LINK))
+                });
+                if adding {
+                    self.add(vec![Source::Link(url)]);
+                } else {
+                    self.open(vec![link_source(url)], false);
                 }
-                self.open(vec![Source::Link(url)], false);
                 String::new()
             }
             Err(err) => {
@@ -533,22 +816,28 @@ impl Opener {
             && !files.is_empty()
         {
             info!("pasted {} files", files.len());
-            self.open(files.into_iter().map(Source::File).collect(), false);
+            self.open(files.into_iter().map(file_source).collect(), false);
             return;
         }
         let Ok(text) = clipboard.get_text() else {
             debug!("paste: nothing usable on the clipboard");
             return;
         };
+        if playlist_file::is_playlist_text(&text) {
+            info!("pasted a playlist");
+            let text = playlist_file::absolutize_text(&text, &std::env::current_dir().unwrap_or_default());
+            self.open(vec![Source::Playlist(PlaylistSource::Text(text))], false);
+            return;
+        }
         if let Ok(url) = media::parse_link(&text) {
             info!("pasted a link");
-            self.open(vec![Source::Link(url)], false);
+            self.open(vec![link_source(url)], false);
             return;
         }
         let text = media::clean_text(&text);
         if !text.is_empty() && !text.contains('\n') {
             info!("pasted text, trying it as a file path");
-            self.open(vec![Source::File(PathBuf::from(text))], true);
+            self.open(vec![file_source(PathBuf::from(text))], true);
         } else {
             debug!("paste: the clipboard text is neither a link nor a path");
         }
@@ -675,7 +964,7 @@ pub fn drop_handler(app: &AppWindow) -> impl FnMut(&WindowEvent) + 'static {
                     Timer::single_shot(Duration::ZERO, move || {
                         let paths = std::mem::take(&mut *dropped.borrow_mut());
                         info!("dropped {} files", paths.len());
-                        let sources = paths.into_iter().map(Source::File).collect();
+                        let sources = paths.into_iter().map(file_source).collect();
                         with_opener(|opener| opener.open(sources, true));
                     });
                 }
@@ -688,8 +977,12 @@ pub fn drop_handler(app: &AppWindow) -> impl FnMut(&WindowEvent) + 'static {
 fn check_hovered(paths: Vec<PathBuf>, app_weak: slint::Weak<AppWindow>, hover_generation: Arc<AtomicU64>) {
     let generation = hover_generation.load(Ordering::Relaxed);
     std::thread::spawn(move || {
-        let playable: Vec<&PathBuf> =
-            paths.iter().filter(|path| matches!(media::check_file(path), FileCheck::Playable)).collect();
+        let playable: Vec<&PathBuf> = paths
+            .iter()
+            .filter(|path| {
+                playlist_file::is_playlist_name(&path.to_string_lossy()) || matches!(media::check_file(path), FileCheck::Playable)
+            })
+            .collect();
         let (state, name) = match playable.as_slice() {
             [] => (DragState::NotPlayable, paths.first().map(|path| file_name(path)).unwrap_or_default()),
             [only] => (DragState::Playable, file_name(only)),
