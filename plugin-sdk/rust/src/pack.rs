@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::manifest::{
-    ICON_FILE, MANIFEST_FILE, MAX_ICON_BYTES, MAX_MANIFEST_BYTES, MAX_WASM_BYTES, PluginManifest, WASM_FILE, check_wasm,
+    ICON_FILES, MANIFEST_FILE, MAX_ICON_BYTES, MAX_MANIFEST_BYTES, MAX_WASM_BYTES, PluginManifest, WASM_FILE, check_icon,
+    check_wasm,
 };
 
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
@@ -70,10 +71,28 @@ pub fn pack_plugin(folder: &Path, output: Option<&Path>) -> Result<PathBuf, Stri
         .ok_or_else(|| format!("{} has no {MANIFEST_FILE}", folder.display()))?;
     let wasm =
         read_limited(folder, WASM_FILE, MAX_WASM_BYTES)?.ok_or_else(|| format!("{} has no {WASM_FILE}", folder.display()))?;
-    let icon = read_limited(folder, ICON_FILE, MAX_ICON_BYTES)?;
+    let mut icons = Vec::new();
+    for name in ICON_FILES {
+        if let Some(bytes) = read_limited(folder, name, MAX_ICON_BYTES)? {
+            check_icon(name, &bytes)?;
+            icons.push((*name, bytes));
+        }
+    }
+    if icons.len() > 1 {
+        let names: Vec<&str> = icons.iter().map(|(name, _)| *name).collect();
+        return Err(format!("{} has {}. Keep one icon", folder.display(), names.join(" and ")));
+    }
+    let icon = icons.pop();
 
     let manifest = PluginManifest::parse(&manifest_raw)?;
     manifest.validate_shape()?;
+    if !crate::API_VERSION.runs(manifest.api_version) {
+        return Err(format!(
+            "apiVersion is {}, and this SDK has plugin API {}. Use an SDK with that API, or a lower apiVersion",
+            manifest.api_version,
+            crate::API_VERSION
+        ));
+    }
     check_wasm(&wasm)?;
 
     let path = output.map_or_else(|| folder.join(manifest.package_file_name()), Path::to_path_buf);
@@ -81,9 +100,8 @@ pub fn pack_plugin(folder: &Path, output: Option<&Path>) -> Result<PathBuf, Stri
 
     let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     let mut archive = zip::ZipWriter::new(file);
-    let entries = [(MANIFEST_FILE, Some(manifest_raw)), (WASM_FILE, Some(wasm)), (ICON_FILE, icon)];
+    let entries = [(MANIFEST_FILE, manifest_raw), (WASM_FILE, wasm)].into_iter().chain(icon);
     for (name, bytes) in entries {
-        let Some(bytes) = bytes else { continue };
         archive
             .start_file(name, options)
             .and_then(|()| archive.write_all(&bytes).map_err(Into::into))

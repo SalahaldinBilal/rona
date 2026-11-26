@@ -1,6 +1,6 @@
 [package]
 name = "rona-plugin"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 description = "Write, build and pack Rona plugins in Rust (plugin API 1)"
 authors = ["SalahaldinBilal"]

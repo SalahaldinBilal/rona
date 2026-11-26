@@ -6,11 +6,12 @@ use serde_json::Value;
 use crate::permissions::{self, IPC_CONNECT, NETWORK, SYSTEM_RUN};
 use crate::tree;
 
-pub use crate::API_VERSION;
+pub use crate::{API_VERSION, ApiVersion};
 
 pub const MANIFEST_FILE: &str = "plugin.json";
 pub const WASM_FILE: &str = "plugin.wasm";
-pub const ICON_FILE: &str = "icon.png";
+/// The icon names a package may use. When there are several, the first one wins.
+pub const ICON_FILES: &[&str] = &["icon.webp", "icon.png", "icon.jpg", "icon.jpeg"];
 pub const PACKAGE_EXTENSION: &str = "rp";
 
 pub const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
@@ -36,6 +37,17 @@ pub const MAX_PATH_DATA: usize = 2000;
 
 pub fn check_wasm(bytes: &[u8]) -> Result<(), String> {
     if bytes.starts_with(b"\0asm") { Ok(()) } else { Err(format!("{WASM_FILE} is not a WebAssembly module")) }
+}
+
+/// Checks that an icon holds the format its name says.
+pub fn check_icon(name: &str, bytes: &[u8]) -> Result<(), String> {
+    let matches = match name {
+        "icon.webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP",
+        "icon.png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "icon.jpg" | "icon.jpeg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
+        _ => return Err(format!("{name} is not an icon name Rona reads")),
+    };
+    if matches { Ok(()) } else { Err(format!("{name} doesn't hold the image format its name says")) }
 }
 
 /// A permission as `plugin.json` asks for it: a reason, or a reason with the hosts or pipes it covers.
@@ -156,7 +168,7 @@ pub struct ActionDecl {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginManifest {
-    pub api_version: u32,
+    pub api_version: ApiVersion,
     pub id: String,
     pub name: String,
     pub version: String,
@@ -274,9 +286,19 @@ impl PluginManifest {
         self.ui.dialogs.iter().find(|dialog| dialog.id == id)
     }
 
-    /// Every rule, plus `minAppVersion` against the app that is about to load the plugin.
+    /// Every rule, plus `apiVersion` and `minAppVersion` against the app that is about to load the plugin.
     pub fn validate(&self, app_version: &str) -> Result<(), String> {
         self.validate_shape()?;
+        let needed = self.api_version;
+        if needed.major < API_VERSION.major {
+            return Err(format!(
+                "This plugin is made for plugin API {needed}, which this version of Rona no longer runs. It needs an update for API {}.x",
+                API_VERSION.major
+            ));
+        }
+        if !API_VERSION.runs(needed) {
+            return Err(format!("This plugin needs plugin API {needed}, and this version of Rona has {API_VERSION}. Update Rona to use it"));
+        }
         if let Some(min) = &self.min_app_version {
             let min = semver::Version::parse(min).map_err(|_| format!("minAppVersion \"{min}\" is not a valid version"))?;
             let app = semver::Version::parse(app_version)
@@ -290,12 +312,6 @@ impl PluginManifest {
 
     /// The rules that don't depend on which app loads the plugin.
     pub fn validate_shape(&self) -> Result<(), String> {
-        if self.api_version != API_VERSION {
-            return Err(format!(
-                "This plugin is made for plugin API {}, this version of Rona supports API {API_VERSION}",
-                self.api_version
-            ));
-        }
         if !is_valid_id(&self.id) {
             return Err(format!(
                 "Plugin id \"{}\" is not valid. Use 3 to 64 lowercase letters, digits, dots and dashes",
@@ -563,6 +579,35 @@ mod tests {
         let mut base = json!({ "apiVersion": 1, "id": "com.example.test", "name": "Test", "version": "1.0.0" });
         base.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
         serde_json::from_value(base).unwrap()
+    }
+
+    #[test]
+    fn a_plugin_runs_on_its_api_and_any_later_minor_of_it() {
+        let runs = |api: Value| manifest(json!({ "apiVersion": api })).validate("0.2.0");
+        // What the 1.0.0 SDK writes, and the same as a string.
+        assert!(runs(json!(1)).is_ok());
+        assert!(runs(json!("1.0")).is_ok());
+        let host = ApiVersion { major: 1, minor: 3 };
+        assert!(host.runs("1.2".parse().unwrap()));
+        assert!(host.runs("1.3".parse().unwrap()));
+        assert!(!host.runs("1.4".parse().unwrap()));
+        assert!(!host.runs("2.0".parse().unwrap()));
+        assert!(!host.runs("0.9".parse().unwrap()));
+    }
+
+    #[test]
+    fn a_plugin_needing_a_newer_api_says_to_update_rona() {
+        let newer = format!("{}.{}", API_VERSION.major, API_VERSION.minor + 1);
+        let err = manifest(json!({ "apiVersion": newer })).validate("0.2.0").unwrap_err();
+        assert!(err.contains("Update Rona"), "{err}");
+    }
+
+    #[test]
+    fn api_versions_that_are_not_major_dot_minor_are_refused() {
+        for text in ["1", "1.0.0", "v1.0", "1.", ".1", "01.0", "1.-1", ""] {
+            assert!(text.parse::<ApiVersion>().is_err(), "{text}");
+        }
+        assert!(PluginManifest::parse(br#"{"apiVersion":1.5,"id":"com.example.test","name":"Test","version":"1.0.0"}"#).is_err());
     }
 
     #[test]

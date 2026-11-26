@@ -198,6 +198,8 @@ export global PluginsUi {
     in property <string> i-version;
     in property <string> i-author;
     in property <string> i-description;
+    in property <bool> i-has-icon;
+    in property <image> i-icon;
     in property <string> i-requester;
     in property <string> i-note;
     in property <string> i-error;
@@ -795,6 +797,31 @@ export component PluginDialog inherits Frame {
     }
 }
 
+component PluginIcon inherits Rectangle {
+    in property <bool> has-icon;
+    in property <image> icon;
+
+    width: 32px;
+    height: 32px;
+    border-radius: 7px;
+    background: #ffffff0d;
+    clip: true;
+
+    if root.has-icon: Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.icon;
+        image-fit: cover;
+    }
+
+    if !root.has-icon: Icon {
+        width: 16px;
+        height: 16px;
+        tint: Theme.muted;
+        stroke-commands: "M 7 2.5 H 11 V 5 A 1.5 1.5 0 0 0 14 5 H 15.5 V 9 A 1.5 1.5 0 0 0 15.5 12 V 15.5 H 2.5 V 12 A 1.5 1.5 0 0 0 2.5 9 V 5 H 7 Z";
+    }
+}
+
 component GrantList inherits VerticalLayout {
     in property <[PluginGrant]> grants;
     in property <bool> enabled: true;
@@ -871,21 +898,38 @@ export component InstallDialog inherits Frame {
             spacing: 10px;
             alignment: start;
 
-            VerticalLayout {
-                spacing: 2px;
+            HorizontalLayout {
+                spacing: 12px;
 
-                Text {
-                    text: PluginsUi.i-name + (PluginsUi.i-version != "" ? "  " + PluginsUi.i-version : "");
-                    color: Theme.text;
-                    font-size: 14px;
-                    font-weight: 600;
-                    wrap: word-wrap;
+                if PluginsUi.i-ready: VerticalLayout {
+                    alignment: center;
+
+                    PluginIcon {
+                        width: 40px;
+                        height: 40px;
+                        has-icon: PluginsUi.i-has-icon;
+                        icon: PluginsUi.i-icon;
+                    }
                 }
 
-                if PluginsUi.i-author != "": Text {
-                    text: "By " + PluginsUi.i-author;
-                    color: Theme.muted;
-                    font-size: 12px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 2px;
+
+                    Text {
+                        text: PluginsUi.i-name + (PluginsUi.i-version != "" ? "  " + PluginsUi.i-version : "");
+                        color: Theme.text;
+                        font-size: 14px;
+                        font-weight: 600;
+                        wrap: word-wrap;
+                    }
+
+                    if PluginsUi.i-author != "": Text {
+                        text: "By " + PluginsUi.i-author;
+                        color: Theme.muted;
+                        font-size: 12px;
+                    }
                 }
             }
 
@@ -967,31 +1011,6 @@ export component InstallDialog inherits Frame {
                 }
             }
         }
-    }
-}
-
-component PluginIcon inherits Rectangle {
-    in property <bool> has-icon;
-    in property <image> icon;
-
-    width: 32px;
-    height: 32px;
-    border-radius: 7px;
-    background: #ffffff0d;
-    clip: true;
-
-    if root.has-icon: Image {
-        width: parent.width;
-        height: parent.height;
-        source: root.icon;
-        image-fit: cover;
-    }
-
-    if !root.has-icon: Icon {
-        width: 16px;
-        height: 16px;
-        tint: Theme.muted;
-        stroke-commands: "M 7 2.5 H 11 V 5 A 1.5 1.5 0 0 0 14 5 H 15.5 V 9 A 1.5 1.5 0 0 0 15.5 12 V 15.5 H 2.5 V 12 A 1.5 1.5 0 0 0 2.5 9 V 5 H 7 Z";
     }
 }
 

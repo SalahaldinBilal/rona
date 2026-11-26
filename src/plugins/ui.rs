@@ -63,6 +63,7 @@ struct Ui {
     models: Vec<Rc<VecModel<PluginRow>>>,
     item_models: Vec<Vec<Rc<VecModel<PluginItem>>>>,
     images: HashMap<usize, slint::Image>,
+    icons: HashMap<PathBuf, (Option<std::time::SystemTime>, u64, Option<slint::Image>)>,
     selected: Option<String>,
     detail_grants: Vec<String>,
     controls: Vec<(String, String)>,
@@ -578,7 +579,23 @@ impl Ui {
         crate::settings::refresh_shortcuts();
     }
 
-    fn show_list(&self) {
+    /// Decoded once per file, and again only when the file changes.
+    fn icon(&mut self, plugin: &Loaded) -> Option<slint::Image> {
+        let path = manager()?.icon_path(plugin)?;
+        let metadata = std::fs::metadata(&path).ok()?;
+        let (modified, size) = (metadata.modified().ok(), metadata.len());
+        if let Some((cached_modified, cached_size, image)) = self.icons.get(&path)
+            && *cached_modified == modified
+            && *cached_size == size
+        {
+            return image.clone();
+        }
+        let image = std::fs::read(&path).ok().and_then(|bytes| decode_icon(&bytes));
+        self.icons.insert(path, (modified, size, image.clone()));
+        image
+    }
+
+    fn show_list(&mut self) {
         let Some(app) = self.ui() else { return };
         let Some(manager) = manager() else { return };
         let items: Vec<PluginListItem> = manager
@@ -586,7 +603,7 @@ impl Ui {
             .iter()
             .map(|plugin| {
                 let (status, status_tone) = plugin.status();
-                let icon = manager.icon(plugin).and_then(|bytes| decode_icon(&bytes));
+                let icon = self.icon(plugin);
                 PluginListItem {
                     name: plugin.manifest().name.as_str().into(),
                     version: plugin.manifest().version.as_str().into(),
@@ -635,7 +652,7 @@ impl Ui {
         plugins.set_d_enabled(plugin.row.enabled);
         plugins.set_d_can_enable(plugin.problem.is_none() || plugin.row.enabled);
         plugins.set_d_dev(plugin.dev());
-        let icon = manager.icon(&plugin).and_then(|bytes| decode_icon(&bytes));
+        let icon = self.icon(&plugin);
         plugins.set_d_has_icon(icon.is_some());
         plugins.set_d_icon(icon.unwrap_or_default());
 
@@ -956,6 +973,9 @@ impl Ui {
                     None => String::new(),
                 };
                 plugins.set_i_note(note.into());
+                let icon = inspection.icon.as_deref().and_then(decode_icon);
+                plugins.set_i_has_icon(icon.is_some());
+                plugins.set_i_icon(icon.unwrap_or_default());
                 plugins.set_i_ready(true);
             }
             None => {
@@ -965,6 +985,7 @@ impl Ui {
                 plugins.set_i_author(SharedString::new());
                 plugins.set_i_description(SharedString::new());
                 plugins.set_i_note(SharedString::new());
+                plugins.set_i_has_icon(false);
                 plugins.set_i_ready(false);
             }
         }
@@ -1208,6 +1229,7 @@ pub fn wire(app: &AppWindow, mpv: &crate::mpv::Mpv, osd: &Osd) {
         models,
         item_models: (0..SLOTS).map(|_| Vec::new()).collect(),
         images: HashMap::new(),
+        icons: HashMap::new(),
         selected: None,
         detail_grants: Vec::new(),
         controls: Vec::new(),

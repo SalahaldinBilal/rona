@@ -33,7 +33,8 @@ declare class TextDecoder {
   decode(bytes: Uint8Array): string;
 }
 
-export const API_VERSION = 1;
+// The plugin API this SDK has, for apiVersion in plugin.json.
+export const API_VERSION = "1.0";
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 

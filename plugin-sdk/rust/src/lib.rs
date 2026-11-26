@@ -1,4 +1,4 @@
-//! SDK for Rona plugins, plugin API 1.
+//! SDK for Rona plugins, plugin API 1.0.
 //!
 //! Inside a plugin (built for wasm): write one function per hook, list them in [`export_hooks!`],
 //! and reach Rona through [`host`]. Every part of `host` that needs a permission is an `Option`,
@@ -23,7 +23,65 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 pub use serde_json::{Value, json};
 
-pub const API_VERSION: u32 = 1;
+/// The plugin API this SDK and the Rona built with it have. New host functions, events and nodes raise the
+/// minor, anything that breaks existing plugins raises the major.
+pub const API_VERSION: ApiVersion = ApiVersion { major: 1, minor: 0 };
+
+/// `apiVersion` in `plugin.json`: `"1.0"`, or a bare `1` (read as `1.0`), which SDK 1.0.0 wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApiVersion {
+    pub major: u32,
+    pub minor: u32,
+}
+
+impl ApiVersion {
+    /// Whether a plugin that asks for `needed` runs on a host with this API.
+    pub fn runs(self, needed: ApiVersion) -> bool {
+        needed.major == self.major && needed.minor <= self.minor
+    }
+}
+
+impl std::fmt::Display for ApiVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.major, self.minor)
+    }
+}
+
+impl std::str::FromStr for ApiVersion {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, String> {
+        let invalid = || format!("apiVersion \"{text}\" is not valid. Use a major and minor version like \"1.0\"");
+        let (major, minor) = text.split_once('.').ok_or_else(invalid)?;
+        let number = |part: &str| {
+            if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) || (part.len() > 1 && part.starts_with('0')) {
+                return Err(invalid());
+            }
+            part.parse::<u32>().map_err(|_| invalid())
+        };
+        Ok(ApiVersion { major: number(major)?, minor: number(minor)? })
+    }
+}
+
+impl Serialize for ApiVersion {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for ApiVersion {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match Value::deserialize(deserializer)? {
+            Value::Number(number) => number
+                .as_u64()
+                .and_then(|major| u32::try_from(major).ok())
+                .map(|major| ApiVersion { major, minor: 0 })
+                .ok_or_else(|| serde::de::Error::custom(format!("apiVersion {number} is not valid. Use a version like \"1.0\""))),
+            Value::String(text) => text.parse().map_err(serde::de::Error::custom),
+            _ => Err(serde::de::Error::custom("apiVersion must be a version like \"1.0\"")),
+        }
+    }
+}
 
 pub type HookResult<T> = Result<T, String>;
 

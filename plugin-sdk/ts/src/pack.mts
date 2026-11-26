@@ -1,5 +1,5 @@
 // Checks <folder>/plugin.json against the rules Rona applies on install and writes <id>-<version>.rp from
-// plugin.json, plugin.wasm and icon.png (if there is one).
+// plugin.json, plugin.wasm and an icon (icon.webp, icon.png, icon.jpg or icon.jpeg) if there is one.
 //
 // The manifest rules mirror plugin-sdk/rust/src/manifest.rs. Keep them in step.
 
@@ -9,7 +9,9 @@ import { crc32, deflateRawSync } from "node:zlib";
 
 import { validateTree } from "./tree.mts";
 
-const API_VERSION = 1;
+// The plugin API this SDK has. New host functions, events and nodes raise the minor, breaking changes the major.
+const API_VERSION = { major: 1, minor: 0 };
+const API_TEXT = /^(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const WASM_MAGIC = Buffer.from([0x00, 0x61, 0x73, 0x6d]);
 const HOOKS = ["on_event", "ui_render", "ui_event", "resolve_link", "ipc_accept"];
 const PERMISSIONS = [
@@ -25,7 +27,11 @@ const MAX_ACTIONS = 16;
 const MAX_DIALOGS = 8;
 const MAX_LABEL = 40;
 const MAX_REASON = 200;
-const LIMITS = { "plugin.json": 256 * 1024, "plugin.wasm": 64 * 1024 * 1024, "icon.png": 256 * 1024 };
+// When a folder has several, packing fails. Rona reads the first it finds, in this order.
+const ICON_FILES = ["icon.webp", "icon.png", "icon.jpg", "icon.jpeg"] as const;
+const ICON_LIMIT = 256 * 1024;
+const LIMITS: Record<string, number> = { "plugin.json": 256 * 1024, "plugin.wasm": 64 * 1024 * 1024 };
+for (const name of ICON_FILES) LIMITS[name] = ICON_LIMIT;
 
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
 const PLUGIN_ID = /^[a-z0-9.-]{3,64}$/;
@@ -81,9 +87,21 @@ function checkPipe(entry: unknown): void {
   }
 }
 
+// "1.0", or a bare 1 (read as 1.0), which SDK 1.0.0 wrote.
+function apiVersion(value: unknown): { major: number, minor: number } {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return { major: value, minor: 0 };
+  const parts = typeof value === "string" ? API_TEXT.exec(value) : null;
+  if (!parts) fail(`apiVersion ${JSON.stringify(value)} is not valid. Use a major and minor version like "1.0"`);
+  return { major: Number(parts[1]), minor: Number(parts[2]) };
+}
+
 export function checkManifest(manifest: unknown): { id: string, version: string } {
   if (!isObject(manifest)) fail("plugin.json must hold an object");
-  if (manifest.apiVersion !== API_VERSION) fail(`apiVersion must be ${API_VERSION}`);
+  const api = apiVersion(manifest.apiVersion);
+  if (api.major !== API_VERSION.major || api.minor > API_VERSION.minor) {
+    const have = `${API_VERSION.major}.${API_VERSION.minor}`;
+    fail(`apiVersion is ${api.major}.${api.minor}, and this SDK has plugin API ${have}. Use an SDK with that API, or a lower apiVersion`);
+  }
 
   const id = manifest.id;
   const idValid = typeof id === "string" && PLUGIN_ID.test(id) && !/^[.-]|[.-]$/.test(id) && !id.includes("..");
@@ -248,7 +266,23 @@ function zip(entries: Entry[]): Buffer {
   return Buffer.concat([...parts, ...directory, end]);
 }
 
-function readEntry(folder: string, name: keyof typeof LIMITS, required: boolean): Entry | null {
+// Checks that an icon holds the format its name says, like check_icon in manifest.rs.
+export function checkIcon(name: string, data: Buffer): void {
+  const ascii = (start: number, end: number) => data.subarray(start, end).toString("latin1");
+  const matches = name === "icon.webp" ? data.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP"
+    : name === "icon.png" ? data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    : data.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
+  if (!matches) fail(`${name} doesn't hold the image format its name says`);
+}
+
+function readIcon(folder: string): Entry | null {
+  const icons = ICON_FILES.map(name => readEntry(folder, name, false)).filter(entry => entry !== null);
+  if (icons.length > 1) fail(`${folder} has ${icons.map(icon => icon.name).join(" and ")}. Keep one icon`);
+  for (const icon of icons) checkIcon(icon.name, icon.data);
+  return icons[0] ?? null;
+}
+
+function readEntry(folder: string, name: string, required: boolean): Entry | null {
   const path = join(folder, name);
   if (!existsSync(path)) {
     if (required) fail(`${path} is missing`);
@@ -264,7 +298,7 @@ export function packPlugin(pluginFolder: string, outputFile?: string): string {
   const folder = resolve(pluginFolder);
   const manifestEntry = readEntry(folder, "plugin.json", true)!;
   const wasmEntry = readEntry(folder, "plugin.wasm", true)!;
-  const iconEntry = readEntry(folder, "icon.png", false);
+  const iconEntry = readIcon(folder);
   if (!wasmEntry.data.subarray(0, 4).equals(WASM_MAGIC)) fail("plugin.wasm is not a WebAssembly module");
 
   let manifest: unknown;

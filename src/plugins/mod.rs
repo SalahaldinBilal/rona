@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 use crate::logging::{info, warn};
 use crate::mpv::Mpv;
 
-use manifest::{HOOK_RESOLVE_LINK, ICON_FILE, PluginManifest, WASM_FILE};
+use manifest::{HOOK_RESOLVE_LINK, PluginManifest, WASM_FILE};
 use package::{Package, sha256_hex};
 use runtime::{Job, LogBuffer, Shared, WasmSource, lock};
 use store::{PluginRow, Store};
@@ -125,6 +125,7 @@ pub struct Inspection {
     pub installed_version: Option<String>,
     /// Every switch with whether it starts on and whether this version adds it.
     pub grants: Vec<(manifest::Grant, bool, bool)>,
+    pub icon: Option<Vec<u8>>,
 }
 
 pub struct Manager {
@@ -416,8 +417,8 @@ impl Manager {
         Some(shared)
     }
 
-    pub fn icon(&self, plugin: &Loaded) -> Option<Vec<u8>> {
-        std::fs::read(plugin.folder.join(ICON_FILE)).ok()
+    pub fn icon_path(&self, plugin: &Loaded) -> Option<PathBuf> {
+        package::icon_path(&plugin.folder)
     }
 
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), String> {
@@ -503,6 +504,7 @@ impl Manager {
             installed_version: installed.map(|installed| installed.manifest().version.clone()),
             manifest: package.manifest,
             grants,
+            icon: package.icon.map(|(_, bytes)| bytes),
         })
     }
 

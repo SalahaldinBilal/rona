@@ -13,6 +13,7 @@ This folder holds:
 
 - [Quick start](#quick-start)
 - [The package](#the-package)
+- [API versions](#api-versions)
 - [plugin.json](#pluginjson)
 - [Permissions](#permissions)
 - [Hooks](#hooks)
@@ -94,15 +95,23 @@ In Rona, Settings > Plugins > Load from folder runs the plugin straight from its
 
 ## The package
 
-A `.rp` file is a zip holding `plugin.json`, `plugin.wasm` and, if you like, `icon.png` (at most 256 KB, shown at 32 and 40 px). Other files in it are ignored. Opening a `.rp` file, dropping it on Rona's window or choosing Settings > Plugins > Install from file shows the install dialog. Updating means installing a newer `.rp` with the same id. The user's switches carry over, and permissions the new version adds are marked as new.
+A `.rp` file is a zip holding `plugin.json`, `plugin.wasm` and, if you like, an icon: `icon.webp`, or `icon.png`, `icon.jpg` or `icon.jpeg` if you have one of those already. It's at most 256 KB, square, and shown at up to 40 px, so 64 by 64 is plenty. The packer refuses a folder with more than one icon, or an icon whose content doesn't match its name. Other files in the package are ignored. Opening a `.rp` file, dropping it on Rona's window or choosing Settings > Plugins > Install from file shows the install dialog. Updating means installing a newer `.rp` with the same id. The user's switches carry over, and permissions the new version adds are marked as new.
 
 Rona hashes `plugin.wasm` when it installs a plugin and checks the hash every time it loads it. A changed file leaves the plugin off. Plugins loaded from a folder skip this check.
+
+## API versions
+
+The plugin API has a major and a minor version, now `1.0`. A minor version only adds things: host functions, events, view nodes. A major version is for changes that break plugins written for the one before.
+
+A plugin names the version it's written for in `apiVersion`. Rona runs it when the major is the same as its own and the minor is the same or lower, so a `1.0` plugin runs on a Rona with API `1.3`, and a `1.3` plugin doesn't run on a Rona with `1.0`. That Rona says it needs an update. Set `apiVersion` to the lowest version that has everything the plugin uses, so it runs on as many versions of Rona as it can.
+
+Each SDK release has the plugin API of its own major and minor version: SDK `1.2.x` has API `1.2`. The packer refuses an `apiVersion` newer than its SDK's. A bare `1`, which SDK 1.0.0 wrote, counts as `1.0`.
 
 ## plugin.json
 
 ```json
 {
-  "apiVersion": 1,
+  "apiVersion": "1.0",
   "id": "com.example.lyrics",
   "name": "Lyrics",
   "version": "1.2.0",
@@ -131,7 +140,7 @@ Rona hashes `plugin.wasm` when it installs a plugin and checks the hash every ti
 
 | Key | |
 |---|---|
-| `apiVersion` | Always `1` for now. |
+| `apiVersion` | The plugin API the plugin is written for, like `"1.0"`. See [API versions](#api-versions). |
 | `id` | 3 to 64 lowercase letters, digits, dots and dashes, like `com.example.lyrics`. It names the plugin's folder and storage, so it never changes. |
 | `name`, `version` | Up to 64 characters, and a semver version. |
 | `author`, `description`, `homepage` | Shown in the install dialog and on the plugin's page. `homepage` must be https. |

@@ -1,6 +1,6 @@
 {
   "name": "@rona-player/plugin",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Write, build and pack Rona plugins in TypeScript (plugin API 1)",
   "keywords": ["rona", "plugin", "extism", "wasm"],
   "license": "GPL-3.0-or-later",
