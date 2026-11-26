@@ -19,6 +19,7 @@ mod opener;
 mod playlist;
 mod playlist_edit;
 mod playlist_file;
+mod plugins;
 mod recorder;
 mod recorder_window;
 mod resume;
@@ -177,36 +178,111 @@ impl Osd {
 // How long another launch waits for this window's UI thread to take its files.
 const HANDOVER_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Ways to run Rona that talk to the running window's plugins and exit, without a window of their own.
+enum PluginCommand {
+    Send { plugin: String, message: String },
+    NativeMessaging { plugin: String, origin: String },
+    Install { path: String },
+}
+
 #[derive(Default)]
 struct Arguments {
     version: bool,
     new_instance: bool,
+    plugin_command: Option<PluginCommand>,
     sources: Vec<String>,
 }
 
+const PLUGIN_USAGE: &str = "Usage:
+  rona --plugin-send <plugin id> <json>        Send one message to a plugin and print its first answer
+  rona --native-messaging <plugin id> [origin] Pass a browser extension's native messages to a plugin
+  rona --install-plugin <file.rp>              Ask the user to install a plugin";
+
 // args_os, because args panics on a path that isn't valid Unicode.
-fn parse_arguments() -> Arguments {
+fn parse_arguments() -> Result<Arguments, String> {
     let mut arguments = Arguments::default();
-    for argument in std::env::args_os().skip(1) {
-        let argument = argument.to_string_lossy().into_owned();
+    let mut all = std::env::args_os().skip(1).map(|argument| argument.to_string_lossy().into_owned());
+    while let Some(argument) = all.next() {
+        let mut required = |what: &str| all.next().ok_or_else(|| format!("{argument} needs {what}\n\n{PLUGIN_USAGE}"));
         match argument.as_str() {
             "--version" => arguments.version = true,
             "--new-instance" => arguments.new_instance = true,
+            "--plugin-send" => {
+                let plugin = required("a plugin id")?;
+                let message = required("a JSON message")?;
+                arguments.plugin_command = Some(PluginCommand::Send { plugin, message });
+            }
+            "--install-plugin" => arguments.plugin_command = Some(PluginCommand::Install { path: required("a .rp file")? }),
+            // Browsers start a native messaging host with the extension's origin after the host's own arguments.
+            "--native-messaging" => {
+                let plugin = required("a plugin id")?;
+                let origin = all.next().unwrap_or_default();
+                arguments.plugin_command = Some(PluginCommand::NativeMessaging { plugin, origin });
+            }
             _ => arguments.sources.push(opener::absolute_argument(argument)),
         }
     }
-    arguments
+    Ok(arguments)
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let arguments = parse_arguments();
+fn run_plugin_command(command: PluginCommand) -> std::process::ExitCode {
+    use std::process::ExitCode;
+    match command {
+        PluginCommand::Send { plugin, message } => match plugins::ipc::send_once(&plugin, &message) {
+            Ok(answer) => {
+                if !answer.is_empty() {
+                    println!("{answer}");
+                }
+                ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("rona: {err}");
+                ExitCode::from(2)
+            }
+        },
+        PluginCommand::NativeMessaging { plugin, origin } => match plugins::ipc::native_messaging(&plugin, &origin) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("rona: {err}");
+                ExitCode::from(2)
+            }
+        },
+        PluginCommand::Install { path } => match plugins::ipc::request_install(&path) {
+            Ok(result) => {
+                println!("{result}");
+                if result == "installed" { ExitCode::SUCCESS } else { ExitCode::from(1) }
+            }
+            Err(err) => {
+                println!("failed: {err}");
+                ExitCode::from(2)
+            }
+        },
+    }
+}
+
+fn main() -> Result<std::process::ExitCode, Box<dyn Error>> {
+    let mut arguments = match parse_arguments() {
+        Ok(arguments) => arguments,
+        Err(message) => {
+            attach_parent_console();
+            eprintln!("rona: {message}");
+            return Ok(std::process::ExitCode::from(2));
+        }
+    };
+    if let Some(command) = arguments.plugin_command.take() {
+        // A browser gives a native messaging host pipes for stdin and stdout, which a console would replace.
+        if !matches!(command, PluginCommand::NativeMessaging { .. }) {
+            attach_parent_console();
+        }
+        return Ok(run_plugin_command(command));
+    }
     // Also starts mpv, so the release workflow can tell that a package finds libmpv and what it needs.
     if arguments.version {
         attach_parent_console();
         println!("Rona {}", env!("CARGO_PKG_VERSION"));
         Mpv::new()?;
         println!("libmpv loaded");
-        return Ok(());
+        return Ok(std::process::ExitCode::SUCCESS);
     }
 
     logging::init();
@@ -224,7 +300,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Err(err) => error!("exiting after an error: {err}"),
     }
     logging::flush();
-    result
+    result.map(|()| std::process::ExitCode::SUCCESS)
 }
 
 fn run(arguments: Arguments) -> Result<(), Box<dyn Error>> {
@@ -299,6 +375,7 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn Error>> {
         .map_err(|err| format!("could not attach the video renderer: {err:?}"))?;
 
     opener::wire(&app, &mpv, &osd, loader);
+    plugins::ui::wire(&app, &mpv, &osd);
     playlist_edit::wire(&app, &osd);
     wire_playback(&mpv, &app, &osd, &config);
     wire_window_controls(&app, &osd, &config, &saved_state);
@@ -332,6 +409,7 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn Error>> {
     info!("window ready");
     app.run()?;
     info!("event loop ended");
+    plugins::ui::shutdown();
     if let Some(listener) = &listener {
         listener.stop();
     }

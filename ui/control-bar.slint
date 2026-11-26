@@ -6,9 +6,15 @@ import { IconButton } from "components/buttons.slint";
 import { Badge } from "components/badge.slint";
 import { SeekBar } from "seek-bar.slint";
 import { VolumeControl } from "volume-control.slint";
+import { PluginsUi, PluginControlSlot, PluginBadges, PluginMenuButton, PluginTextMeasure } from "plugins.slint";
 
 export component ControlBar inherits TouchArea {
-    property <bool> shown: !WindowControls.fullscreen || root.has-hover || Panels.tracks-open;
+    property <bool> shown: !WindowControls.fullscreen || root.has-hover || Panels.tracks-open || PluginsUi.popover-open;
+    // What the bar's own parts leave, minus its 16 px padding and the row's four 2 px gaps.
+    property <length> plugin-space: root.width - 16px - left.preferred-width - badges.preferred-width - right.preferred-width - 8px;
+    property <bool> plugin-menu: PluginsUi.menu.length > 0 || PluginsUi.controls-width > root.plugin-space;
+    // The Plugins button is 34 px plus 2 px spacing.
+    property <length> plugin-room: root.plugin-space - (root.plugin-menu ? 36px : 0px);
     property <bool> has-file: Player.phase == Phase.playing;
     property <bool> usable: root.shown && root.has-file;
     property <float> dimmed: root.has-file ? 1 : 0.32;
@@ -17,6 +23,8 @@ export component ControlBar inherits TouchArea {
     changed mouse-x => { WindowControls.activity(); }
     changed mouse-y => { WindowControls.activity(); }
     clicked => { Panels.focus-requests += 1; }
+
+    PluginTextMeasure {}
 
     Rectangle {
         background: Theme.chrome;
@@ -49,80 +57,84 @@ export component ControlBar inherits TouchArea {
                 height: 36px;
                 spacing: 2px;
 
-                IconButton {
-                    enabled: root.usable;
-                    opacity: root.dimmed;
-                    clicked => { Player.previous(); }
+                left := HorizontalLayout {
+                    spacing: 2px;
 
-                    Icon {
-                        fill-commands: "M 14 3.5 V 14.5 L 6 9 Z";
-                        stroke-commands: "M 4 3.5 V 14.5";
-                    }
-                }
-
-                IconButton {
-                    width: 36px;
-                    highlight-height: 36px;
-                    enabled: root.usable;
-                    opacity: root.dimmed;
-                    clicked => { Player.toggle-pause(); }
-
-                    Icon {
-                        width: 19px;
-                        height: 19px;
-                        viewbox: 20;
-                        fill-commands: Player.paused
-                            ? "M 6 3.5 V 16.5 L 16.5 10 Z"
-                            : "M 5 3.5 H 8.2 V 16.5 H 5 Z M 11.8 3.5 H 15 V 16.5 H 11.8 Z";
-                    }
-                }
-
-                IconButton {
-                    enabled: root.usable;
-                    opacity: root.dimmed;
-                    clicked => { Player.next(); }
-
-                    Icon {
-                        fill-commands: "M 4 3.5 V 14.5 L 12 9 Z";
-                        stroke-commands: "M 14 3.5 V 14.5";
-                    }
-                }
-
-                VolumeControl {
-                    enabled: root.shown;
-                }
-
-                Text {
-                    text: seek-bar.dragging
-                        ? Player.format-time(Player.duration * seek-bar.hover-fraction) + " / " + Player.format-time(Player.duration)
-                        : Player.time-text;
-                    color: Theme.text;
-                    font-size: 13px;
-                    vertical-alignment: center;
-                    opacity: root.dimmed;
-                }
-
-                if Player.download-speed != "": HorizontalLayout {
-                    padding-left: 12px;
-                    spacing: 4px;
-
-                    VerticalLayout {
-                        alignment: center;
+                    IconButton {
+                        enabled: root.usable;
+                        opacity: root.dimmed;
+                        clicked => { Player.previous(); }
 
                         Icon {
-                            width: 12px;
-                            height: 12px;
-                            viewbox: 12;
-                            tint: Theme.muted;
-                            stroke-commands: "M 6 1.5 V 10 M 2.5 6.5 L 6 10 L 9.5 6.5";
+                            fill-commands: "M 14 3.5 V 14.5 L 6 9 Z";
+                            stroke-commands: "M 4 3.5 V 14.5";
                         }
                     }
 
+                    IconButton {
+                        width: 36px;
+                        highlight-height: 36px;
+                        enabled: root.usable;
+                        opacity: root.dimmed;
+                        clicked => { Player.toggle-pause(); }
+
+                        Icon {
+                            width: 19px;
+                            height: 19px;
+                            viewbox: 20;
+                            fill-commands: Player.paused
+                                ? "M 6 3.5 V 16.5 L 16.5 10 Z"
+                                : "M 5 3.5 H 8.2 V 16.5 H 5 Z M 11.8 3.5 H 15 V 16.5 H 11.8 Z";
+                        }
+                    }
+
+                    IconButton {
+                        enabled: root.usable;
+                        opacity: root.dimmed;
+                        clicked => { Player.next(); }
+
+                        Icon {
+                            fill-commands: "M 4 3.5 V 14.5 L 12 9 Z";
+                            stroke-commands: "M 14 3.5 V 14.5";
+                        }
+                    }
+
+                    VolumeControl {
+                        enabled: root.shown;
+                    }
+
                     Text {
-                        text: Player.download-speed;
-                        color: Theme.muted;
-                        font-size: 12px;
+                        text: seek-bar.dragging
+                            ? Player.format-time(Player.duration * seek-bar.hover-fraction) + " / " + Player.format-time(Player.duration)
+                            : Player.time-text;
+                        color: Theme.text;
+                        font-size: 13px;
                         vertical-alignment: center;
+                        opacity: root.dimmed;
+                    }
+
+                    if Player.download-speed != "": HorizontalLayout {
+                        padding-left: 12px;
+                        spacing: 4px;
+
+                        VerticalLayout {
+                            alignment: center;
+
+                            Icon {
+                                width: 12px;
+                                height: 12px;
+                                viewbox: 12;
+                                tint: Theme.muted;
+                                stroke-commands: "M 6 1.5 V 10 M 2.5 6.5 L 6 10 L 9.5 6.5";
+                            }
+                        }
+
+                        Text {
+                            text: Player.download-speed;
+                            color: Theme.muted;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
                     }
                 }
 
@@ -130,7 +142,7 @@ export component ControlBar inherits TouchArea {
                     horizontal-stretch: 1;
                 }
 
-                VerticalLayout {
+                badges := VerticalLayout {
                     alignment: center;
                     padding-right: 4px;
 
@@ -150,94 +162,110 @@ export component ControlBar inherits TouchArea {
                         if root.has-file && Player.audio-badge != "": Badge {
                             text: Player.audio-badge;
                         }
+                        if root.has-file: PluginBadges {}
                     }
                 }
 
-                IconButton {
-                    width: 42px;
-                    enabled: root.usable;
-                    opacity: root.dimmed;
-                    clicked => { Player.cycle-speed(); }
-                    right-clicked => { Player.reset-speed(); }
-
-                    Text {
-                        text: Player.speed-text;
-                        color: Player.speed != 1 ? Theme.accent : Theme.text;
-                        font-size: 13px;
-                        font-weight: 600;
-                    }
+                PluginControlSlot {
+                    shown: root.shown;
+                    has-file: root.has-file;
+                    room: root.plugin-room;
                 }
 
-                IconButton {
-                    enabled: root.usable;
-                    opacity: root.dimmed;
-                    clicked => { Panels.tracks-open = !Panels.tracks-open; }
-
-                    Icon {
-                        tint: Panels.tracks-open ? Theme.accent : Theme.text;
-                        stroke-commands: "M 2 3.5 H 16 V 14.5 H 2 Z M 5 8 H 9 M 11 8 H 13 M 5 11 H 7 M 9 11 H 13";
-                    }
+                if root.plugin-menu: PluginMenuButton {
+                    enabled: root.shown;
+                    room: root.plugin-room;
                 }
 
-                IconButton {
-                    enabled: root.usable;
-                    opacity: root.dimmed;
-                    clicked => {
-                        Panels.recorder-open = !Panels.recorder-open;
-                        if (Panels.recorder-open && Settings.recorder-placement == 1) {
-                            Panels.playlist-open = false;
+                right := HorizontalLayout {
+                    spacing: 2px;
+
+                    IconButton {
+                        width: 42px;
+                        enabled: root.usable;
+                        opacity: root.dimmed;
+                        clicked => { Player.cycle-speed(); }
+                        right-clicked => { Player.reset-speed(); }
+
+                        Text {
+                            text: Player.speed-text;
+                            color: Player.speed != 1 ? Theme.accent : Theme.text;
+                            font-size: 13px;
+                            font-weight: 600;
                         }
                     }
 
-                    Icon {
-                        tint: Recorder.recording ? Theme.danger : Panels.recorder-open ? Theme.accent : Theme.text;
-                        fill-commands: Recorder.recording ? "M 9 4.5 A 4.5 4.5 0 1 1 9 13.5 A 4.5 4.5 0 1 1 9 4.5 Z" : "";
-                        stroke-commands: Recorder.recording ? "" : "M 9 4.5 A 4.5 4.5 0 1 1 9 13.5 A 4.5 4.5 0 1 1 9 4.5 Z";
-                    }
-                }
+                    IconButton {
+                        enabled: root.usable;
+                        opacity: root.dimmed;
+                        clicked => { Panels.tracks-open = !Panels.tracks-open; }
 
-                IconButton {
-                    enabled: root.shown;
-                    clicked => {
-                        Panels.playlist-open = !Panels.playlist-open;
-                        if (Panels.playlist-open && Settings.recorder-placement == 1) {
-                            Panels.recorder-open = false;
+                        Icon {
+                            tint: Panels.tracks-open ? Theme.accent : Theme.text;
+                            stroke-commands: "M 2 3.5 H 16 V 14.5 H 2 Z M 5 8 H 9 M 11 8 H 13 M 5 11 H 7 M 9 11 H 13";
                         }
                     }
 
-                    Icon {
-                        tint: Panels.playlist-open ? Theme.accent : Theme.text;
-                        fill-commands: "M 12.5 10.5 V 15.5 L 16 13 Z";
-                        stroke-commands: "M 3 3.5 H 15 M 3 8 H 11 M 3 12.5 H 9";
-                    }
-                }
+                    IconButton {
+                        enabled: root.usable;
+                        opacity: root.dimmed;
+                        clicked => {
+                            Panels.recorder-open = !Panels.recorder-open;
+                            if (Panels.recorder-open && Settings.recorder-placement == 1) {
+                                Panels.playlist-open = false;
+                            }
+                        }
 
-                IconButton {
-                    enabled: root.shown;
-                    clicked => {
-                        Panels.settings-open = !Panels.settings-open;
-                        Panels.tracks-open = false;
-                    }
-
-                    if Updates.has-release: Dot {
-                        x: parent.width - self.width - 6px;
-                        y: 6px;
+                        Icon {
+                            tint: Recorder.recording ? Theme.danger : Panels.recorder-open ? Theme.accent : Theme.text;
+                            fill-commands: Recorder.recording ? "M 9 4.5 A 4.5 4.5 0 1 1 9 13.5 A 4.5 4.5 0 1 1 9 4.5 Z" : "";
+                            stroke-commands: Recorder.recording ? "" : "M 9 4.5 A 4.5 4.5 0 1 1 9 13.5 A 4.5 4.5 0 1 1 9 4.5 Z";
+                        }
                     }
 
-                    Icon {
-                        tint: Panels.settings-open ? Theme.accent : Theme.text;
-                        stroke-commands: "M 14.38 7.46 L 16.36 7.57 L 16.36 10.43 L 14.38 10.54 L 13.9 11.71 L 15.22 13.19 L 13.19 15.22 L 11.71 13.9 L 10.54 14.38 L 10.43 16.36 L 7.57 16.36 L 7.46 14.38 L 6.29 13.9 L 4.81 15.22 L 2.78 13.19 L 4.1 11.71 L 3.62 10.54 L 1.64 10.43 L 1.64 7.57 L 3.62 7.46 L 4.1 6.29 L 2.78 4.81 L 4.81 2.78 L 6.29 4.1 L 7.46 3.62 L 7.57 1.64 L 10.43 1.64 L 10.54 3.62 L 11.71 4.1 L 13.19 2.78 L 15.22 4.81 L 13.9 6.29 Z M 11.5 9 A 2.5 2.5 0 1 1 6.5 9 A 2.5 2.5 0 1 1 11.5 9";
+                    IconButton {
+                        enabled: root.shown;
+                        clicked => {
+                            Panels.playlist-open = !Panels.playlist-open;
+                            if (Panels.playlist-open && Settings.recorder-placement == 1) {
+                                Panels.recorder-open = false;
+                            }
+                        }
+
+                        Icon {
+                            tint: Panels.playlist-open ? Theme.accent : Theme.text;
+                            fill-commands: "M 12.5 10.5 V 15.5 L 16 13 Z";
+                            stroke-commands: "M 3 3.5 H 15 M 3 8 H 11 M 3 12.5 H 9";
+                        }
                     }
-                }
 
-                IconButton {
-                    enabled: root.shown;
-                    clicked => { WindowControls.toggle-fullscreen(); }
+                    IconButton {
+                        enabled: root.shown;
+                        clicked => {
+                            Panels.settings-open = !Panels.settings-open;
+                            Panels.tracks-open = false;
+                        }
 
-                    Icon {
-                        stroke-commands: WindowControls.fullscreen
-                            ? "M 7 3 V 7 H 3 M 15 7 H 11 V 3 M 11 15 V 11 H 15 M 3 11 H 7 V 15"
-                            : "M 3 7 V 3 H 7 M 11 3 H 15 V 7 M 15 11 V 15 H 11 M 7 15 H 3 V 11";
+                        if Updates.has-release: Dot {
+                            x: parent.width - self.width - 6px;
+                            y: 6px;
+                        }
+
+                        Icon {
+                            tint: Panels.settings-open ? Theme.accent : Theme.text;
+                            stroke-commands: "M 14.38 7.46 L 16.36 7.57 L 16.36 10.43 L 14.38 10.54 L 13.9 11.71 L 15.22 13.19 L 13.19 15.22 L 11.71 13.9 L 10.54 14.38 L 10.43 16.36 L 7.57 16.36 L 7.46 14.38 L 6.29 13.9 L 4.81 15.22 L 2.78 13.19 L 4.1 11.71 L 3.62 10.54 L 1.64 10.43 L 1.64 7.57 L 3.62 7.46 L 4.1 6.29 L 2.78 4.81 L 4.81 2.78 L 6.29 4.1 L 7.46 3.62 L 7.57 1.64 L 10.43 1.64 L 10.54 3.62 L 11.71 4.1 L 13.19 2.78 L 15.22 4.81 L 13.9 6.29 Z M 11.5 9 A 2.5 2.5 0 1 1 6.5 9 A 2.5 2.5 0 1 1 11.5 9";
+                        }
+                    }
+
+                    IconButton {
+                        enabled: root.shown;
+                        clicked => { WindowControls.toggle-fullscreen(); }
+
+                        Icon {
+                            stroke-commands: WindowControls.fullscreen
+                                ? "M 7 3 V 7 H 3 M 15 7 H 11 V 3 M 11 15 V 11 H 15 M 3 11 H 7 V 15"
+                                : "M 3 7 V 3 H 7 M 11 3 H 15 V 7 M 15 11 V 15 H 11 M 7 15 H 3 V 11";
+                        }
                     }
                 }
             }

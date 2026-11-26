@@ -6,6 +6,7 @@ export interface Extensions {
     video: string[];
     audio: string[];
     playlist: string[];
+    plugin: string[];
 }
 
 /** The app's extension lists, read from src/extensions.rs so the installer registers exactly what it plays. */
@@ -14,6 +15,7 @@ export function readExtensions(source = read(path.join(root, "src/extensions.rs"
         video: list(source, "VIDEO_EXTENSIONS"),
         audio: list(source, "AUDIO_EXTENSIONS"),
         playlist: list(source, "PLAYLIST_EXTENSIONS"),
+        plugin: list(source, "PLUGIN_EXTENSIONS"),
     };
 }
 

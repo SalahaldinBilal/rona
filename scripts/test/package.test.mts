@@ -19,11 +19,13 @@ test("the installer registers the extensions the app plays", () => {
     assert.ok(install.includes('"Software\\Classes\\Rona.flac" "" "FLAC audio"'));
 });
 
-test("Rona becomes the default for its own playlist files, and only for those", () => {
+test("Rona becomes the default for its own playlist and plugin files, and only for those", () => {
     const { install } = sections();
-    assert.ok(install.includes('WriteRegStr SHCTX "Software\\Classes\\.rl" "" "Rona.rl"'));
     const defaults = install.split("\n").filter((line) => /"Software\\Classes\\\.[a-z0-9]+" ""/.test(line));
-    assert.deepEqual(defaults.map((line) => line.trim()), ['WriteRegStr SHCTX "Software\\Classes\\.rl" "" "Rona.rl"']);
+    assert.deepEqual(defaults.map((line) => line.trim()), [
+        'WriteRegStr SHCTX "Software\\Classes\\.rl" "" "Rona.rl"',
+        'WriteRegStr SHCTX "Software\\Classes\\.rp" "" "Rona.rp"',
+    ]);
 });
 
 // Another app may have become the default for .rl since, and uninstalling Rona must not take that away.

@@ -16,8 +16,10 @@ import { LinkBox } from "link-box.slint";
 import { PlaylistDetailsDialog, EntryDialog, SavePrompt } from "playlist-dialogs.slint";
 import { UpdateBanner } from "update-banner.slint";
 import { ResizeFrame } from "components/resize-frame.slint";
+import { PluginsUi, PluginPanel, PluginPopover, PluginDialog, InstallDialog } from "plugins.slint";
 
 export { Theme } from "theme.slint";
+export { PluginsUi, PluginItem, PluginRow, PluginListItem, PluginGrant, PluginControl, PluginMenuEntry, PluginAction, PluginControlPref } from "plugins.slint";
 export { RecorderWindow } from "recorder-window.slint";
 export { Player, WindowControls, Panels, Recorder, Settings, Updates, UpdatePhase, ResizeEdge, Phase, FailureKind, DragState, TrackItem, PlaylistItem, LoadedRange, ChapterItem, ShortcutItem, ThemeProfiles, ThemeItem, ColorText, ParsedColor, CoverState, PlaylistDoc, HeaderItem, SkipItem, SubtitleItem, SectionItem } from "state.slint";
 export component AppWindow inherits Window {
@@ -33,22 +35,43 @@ export component AppWindow inherits Window {
     property <bool> recorder-in-sidebar: Panels.recorder-open && Settings.recorder-placement == 1;
     property <bool> recorder-in-window: Panels.recorder-open && Settings.recorder-placement == 0;
     changed recorder-in-window => { Panels.recorder-window-changed(self.recorder-in-window); }
+    property <length> plugin-panel-width: 320px;
     property <length> side-panel-reveal: Panels.playlist-open
         ? root.playlist-width
-        : root.recorder-in-sidebar ? root.recorder-width : 0px;
+        : root.recorder-in-sidebar ? root.recorder-width : PluginsUi.panel-open ? root.plugin-panel-width : 0px;
     animate side-panel-reveal { duration: 200ms; easing: ease-out; }
-    // Both flags are false while a panel slides out, so the last one opened stays drawn until it's gone.
-    property <bool> recorder-opened-last;
-    // The sidebar recorder and the playlist share the right side, also when the setting moves an open recorder there.
+    // 0 playlist, 1 recorder, 2 a plugin's panel. Every flag is false while a panel slides out, so the last one
+    // opened stays drawn until it's gone.
+    property <int> side-opened-last;
+    // The playlist, the sidebar recorder and a plugin's panel share the right side, also when the setting moves an
+    // open recorder there.
     changed recorder-in-sidebar => {
         if (self.recorder-in-sidebar) {
-            self.recorder-opened-last = true;
+            self.side-opened-last = 1;
             Panels.playlist-open = false;
+            PluginsUi.panel-open = false;
         }
     }
     property <bool> playlist-open: Panels.playlist-open;
-    changed playlist-open => { if (self.playlist-open) { self.recorder-opened-last = false; } }
-    property <bool> recorder-side: root.recorder-in-sidebar || (!Panels.playlist-open && root.recorder-opened-last);
+    changed playlist-open => {
+        if (self.playlist-open) {
+            self.side-opened-last = 0;
+            PluginsUi.panel-open = false;
+        }
+    }
+    property <bool> plugin-panel-open: PluginsUi.panel-open;
+    changed plugin-panel-open => {
+        if (self.plugin-panel-open) {
+            self.side-opened-last = 2;
+            Panels.playlist-open = false;
+            if (root.recorder-in-sidebar) {
+                Panels.recorder-open = false;
+            }
+        }
+    }
+    property <int> side-shown: Panels.playlist-open
+        ? 0
+        : root.recorder-in-sidebar ? 1 : PluginsUi.panel-open ? 2 : root.side-opened-last;
     property <length> menu-offset: Panels.tracks-open ? 0px : 8px;
     animate menu-offset { duration: 140ms; easing: ease-out; }
 
@@ -115,6 +138,18 @@ export component AppWindow inherits Window {
             }
         }
         key-pressed(event) => {
+            if (event.text == Key.Escape && PluginsUi.install-open) {
+                PluginsUi.install-answer(false);
+                return accept;
+            }
+            if (event.text == Key.Escape && PluginsUi.dialog-open) {
+                PluginsUi.dialog-close();
+                return accept;
+            }
+            if (event.text == Key.Escape && PluginsUi.popover-open) {
+                PluginsUi.popover-open = false;
+                return accept;
+            }
             if (event.text == Key.Escape && PlaylistDoc.prompt-open) {
                 PlaylistDoc.prompt-answer(0);
                 return accept;
@@ -187,6 +222,7 @@ export component AppWindow inherits Window {
         clicked => {
             keys.focus();
             Panels.tracks-open = false;
+            PluginsUi.popover-open = false;
         }
         double-clicked => {
             if (Settings.double-click == 0) {
@@ -264,7 +300,7 @@ export component AppWindow inherits Window {
         y: root.video-y;
         width: max(root.playlist-width, root.side-panel-reveal);
         height: root.video-height;
-        visible: !root.recorder-side && root.side-panel-reveal > 0;
+        visible: root.side-shown == 0 && root.side-panel-reveal > 0;
     }
 
     RecorderPanel {
@@ -272,8 +308,15 @@ export component AppWindow inherits Window {
         y: root.video-y;
         width: max(root.recorder-width, root.side-panel-reveal);
         height: root.video-height;
-        visible: root.recorder-side && root.side-panel-reveal > 0;
+        visible: root.side-shown == 1 && root.side-panel-reveal > 0;
         dismiss => { Panels.recorder-open = false; }
+    }
+
+    if root.side-shown == 2 && root.side-panel-reveal > 0: PluginPanel {
+        x: root.video-width;
+        y: root.video-y;
+        width: max(root.plugin-panel-width, root.side-panel-reveal);
+        height: root.video-height;
     }
 
     Rectangle {
@@ -302,19 +345,36 @@ export component AppWindow inherits Window {
         width: root.width;
     }
 
+    // In fullscreen the bars float over the video, so they stop at a side panel instead of covering it.
+    property <length> bar-width: WindowControls.fullscreen ? root.video-width : root.width;
+
     TitleBar {
+        x: 0;
         y: 0;
+        width: root.bar-width;
     }
 
     controls := ControlBar {
+        x: 0;
         y: root.height - self.height;
+        width: root.bar-width;
     }
 
     TracksMenu {
         open: Panels.tracks-open;
         available-height: controls.y - 6px - Theme.title-height - 8px;
-        x: max(8px, root.width - self.width - 152px);
+        x: max(8px, controls.width - self.width - 152px);
         y: controls.y - self.height - 6px + root.menu-offset;
+    }
+
+    property <length> popover-offset: PluginsUi.popover-open ? 0px : 8px;
+    animate popover-offset { duration: 140ms; easing: ease-out; }
+
+    PluginPopover {
+        open: PluginsUi.popover-open;
+        available-height: controls.y - 6px - Theme.title-height - 8px;
+        x: max(8px, min(controls.width - self.width - 8px, PluginsUi.popover-x - self.width / 2 + 17px));
+        y: controls.y - self.height - 6px + root.popover-offset;
     }
 
     // Dialogs stay created until they have faded out after closing.
@@ -368,6 +428,27 @@ export component AppWindow inherits Window {
         width: root.width;
         height: root.video-height;
         opacity: root.prompt-fade;
+    }
+
+    property <float> plugin-dialog-fade: PluginsUi.dialog-open ? 1 : 0;
+    animate plugin-dialog-fade { duration: Theme.fade-duration; easing: ease-out; }
+    property <float> install-fade: PluginsUi.install-open ? 1 : 0;
+    animate install-fade { duration: Theme.fade-duration; easing: ease-out; }
+
+    if PluginsUi.dialog-open || root.plugin-dialog-fade > 0: PluginDialog {
+        x: 0;
+        y: root.video-y;
+        width: root.width;
+        height: root.video-height;
+        opacity: root.plugin-dialog-fade;
+    }
+
+    if PluginsUi.install-open || root.install-fade > 0: InstallDialog {
+        x: 0;
+        y: root.video-y;
+        width: root.width;
+        height: root.video-height;
+        opacity: root.install-fade;
     }
 
     DropOverlay {

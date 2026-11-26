@@ -6,6 +6,7 @@ import { IconButton } from "components/buttons.slint";
 import { Clickable } from "components/clickable.slint";
 import { Dot } from "components/dot.slint";
 import { TextField, Checkbox, Segmented, Select, Slider, ColorChoice, ColorField, TextButton } from "components/form.slint";
+import { PluginsPage, PluginsUi } from "plugins.slint";
 
 component SectionHeading inherits Text {
     color: Theme.muted;
@@ -518,6 +519,70 @@ component InterfacePage inherits Page {
         Unit { text: "seconds"; }
         Rectangle { horizontal-stretch: 1; }
     }
+
+    if PluginsUi.control-prefs.length > 0: VerticalLayout {
+        spacing: 10px;
+
+        Gap {}
+        SectionHeading { text: "PLUGIN CONTROLS"; }
+
+        InfoText {
+            text: "Controls plugins add to the control bar, in the order they show. The ones that don't fit go in the Plugins menu.";
+        }
+
+        VerticalLayout {
+            spacing: 2px;
+
+            for pref[index] in PluginsUi.control-prefs: HorizontalLayout {
+                spacing: 4px;
+
+                Checkbox {
+                    horizontal-stretch: 1;
+                    text: pref.label;
+                    checked: pref.shown;
+                    toggled => { PluginsUi.control-pref-shown(index, self.checked); }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    IconButton {
+                        width: 28px;
+                        height: 28px;
+                        highlight-height: 28px;
+                        enabled: index > 0;
+                        opacity: index > 0 ? 1 : 0.32;
+                        clicked => { PluginsUi.control-pref-move(index, index - 1); }
+
+                        Icon {
+                            width: 12px;
+                            height: 12px;
+                            stroke-commands: "M 4 11 L 9 6 L 14 11";
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    IconButton {
+                        width: 28px;
+                        height: 28px;
+                        highlight-height: 28px;
+                        enabled: index < PluginsUi.control-prefs.length - 1;
+                        opacity: index < PluginsUi.control-prefs.length - 1 ? 1 : 0.32;
+                        clicked => { PluginsUi.control-pref-move(index, index + 1); }
+
+                        Icon {
+                            width: 12px;
+                            height: 12px;
+                            stroke-commands: "M 4 7 L 9 12 L 14 7";
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 component ThemePage inherits Page {
@@ -891,7 +956,7 @@ component NavItem inherits Rectangle {
 export component SettingsDialog inherits Rectangle {
     // In Panels, so the update banner can open the dialog on the Updates page.
     property <int> page <=> Panels.settings-page;
-    property <[string]> pages: ["Playback", "Video", "Audio", "Subtitles", "Streaming", "Interface", "Theme", "Shortcuts", "Updates"];
+    property <[string]> pages: ["Playback", "Video", "Audio", "Subtitles", "Streaming", "Interface", "Theme", "Shortcuts", "Updates", "Plugins"];
 
     background: #00000080;
 
@@ -1001,6 +1066,7 @@ export component SettingsDialog inherits Rectangle {
                     if root.page == 6: ThemePage {}
                     if root.page == 7: ShortcutsPage {}
                     if root.page == 8: UpdatesPage {}
+                    if root.page == 9: PluginsPage {}
                 }
             }
 
@@ -1032,7 +1098,7 @@ export component SettingsDialog inherits Rectangle {
                         TextButton {
                             width: 130px;
                             text: "Reset this page";
-                            enabled: root.page != 6 || ThemeProfiles.current > 0;
+                            enabled: root.page != 9 && (root.page != 6 || ThemeProfiles.current > 0);
                             clicked => {
                                 if (root.page == 6) {
                                     ThemeProfiles.revert-all();

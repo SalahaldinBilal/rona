@@ -9,3 +9,4 @@ pub const AUDIO_EXTENSIONS: [&str; 17] = [
     "mp3", "m4a", "m4b", "aac", "flac", "wav", "ogg", "oga", "opus", "wma", "mka", "ape", "wv", "aiff", "aif", "ac3", "dts",
 ];
 pub const PLAYLIST_EXTENSIONS: [&str; 1] = ["rl"];
+pub const PLUGIN_EXTENSIONS: [&str; 1] = ["rp"];

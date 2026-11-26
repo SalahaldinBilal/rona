@@ -8,6 +8,7 @@ const WINDOW_ICON_SIZES: [u32; 2] = [32, 256];
 const ICO_SIZES: [u32; 6] = [16, 24, 32, 48, 64, 256];
 const HICOLOR_SIZES: [u32; 8] = [16, 22, 24, 32, 48, 64, 128, 256];
 const PLAYLIST_MIME_TYPE: &str = "application/x-rona-playlist";
+const PLUGIN_MIME_TYPE: &str = "application/x-rona-plugin";
 
 #[allow(dead_code)]
 mod extensions {
@@ -90,18 +91,25 @@ fn write_linux_desktop_files(tree: &resvg::usvg::Tree, svg: &[u8], out_dir: &Pat
     fs::write(mime.join(format!("{APP_ID}.xml")), mime_info()).expect("failed to write the MIME type");
 }
 
+fn globs(extensions: &[&str]) -> String {
+    extensions.iter().map(|extension| format!("    <glob pattern=\"*.{extension}\"/>\n")).collect()
+}
+
 fn mime_info() -> String {
-    let globs: String = extensions::PLAYLIST_EXTENSIONS
-        .iter()
-        .map(|extension| format!("    <glob pattern=\"*.{extension}\"/>\n"))
-        .collect();
+    let playlist = globs(&extensions::PLAYLIST_EXTENSIONS);
+    let plugin = globs(&extensions::PLUGIN_EXTENSIONS);
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <mime-info xmlns=\"http://www.freedesktop.org/standards/shared-mime-info\">\n\
          \x20 <mime-type type=\"{PLAYLIST_MIME_TYPE}\">\n\
          \x20   <comment>Rona playlist</comment>\n\
          \x20   <sub-class-of type=\"application/json\"/>\n\
-         {globs}\
+         {playlist}\
+         \x20 </mime-type>\n\
+         \x20 <mime-type type=\"{PLUGIN_MIME_TYPE}\">\n\
+         \x20   <comment>Rona plugin</comment>\n\
+         \x20   <sub-class-of type=\"application/zip\"/>\n\
+         {plugin}\
          \x20 </mime-type>\n\
          </mime-info>\n"
     )
@@ -112,7 +120,7 @@ fn desktop_entry() -> String {
     let mime_types = [
         "video/mp4", "video/x-matroska", "video/webm", "video/quicktime", "video/x-msvideo", "video/mpeg",
         "video/mp2t", "video/x-flv", "video/ogg", "audio/mpeg", "audio/flac", "audio/ogg", "audio/opus",
-        "audio/mp4", "audio/x-wav", "audio/x-matroska", PLAYLIST_MIME_TYPE,
+        "audio/mp4", "audio/x-wav", "audio/x-matroska", PLAYLIST_MIME_TYPE, PLUGIN_MIME_TYPE,
     ];
     format!(
         "[Desktop Entry]\nType=Application\nName=Rona\nComment=Video player\nExec={APP_ID} %U\n\

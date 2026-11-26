@@ -7,6 +7,7 @@
   "scripts": {
     "task": "node scripts/tasks.mts",
     "version:bump": "node scripts/tasks.mts bump",
+    "publish:sdk": "node scripts/tasks.mts publish-sdk",
     "test": "node --test \"scripts/test/*.test.mts\"",
     "typecheck": "tsc"
   },

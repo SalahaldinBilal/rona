@@ -99,6 +99,7 @@ keys! {
     Color "accent-hover" get_accent_hover set_accent_hover,
     Color "accent-soft" get_accent_soft set_accent_soft,
     Color "danger" get_danger set_danger,
+    Color "success" get_success set_success,
     Color "warning" get_warning set_warning,
     Color "on-warning" get_on_warning set_on_warning,
     Length "title-height" get_title_height set_title_height,

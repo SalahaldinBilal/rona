@@ -1,0 +1,31 @@
+{
+  "apiVersion": 1,
+  "id": "com.rona.examples.ab-loop",
+  "name": "A-B loop",
+  "version": "1.0.0",
+  "author": "Rona",
+  "description": "Loops a part of what plays. Press the button once for the start, again for the end, and a third time to stop.",
+  "permissions": {
+    "playback.read": "Knows where you are when you set the start and end",
+    "mpv.write": "Sets the loop points",
+    "ui.controls": "Adds the loop button",
+    "ui.osd": "Shows where the loop starts and ends",
+    "input.actions": "Lets you set the loop with a key"
+  },
+  "hooks": ["on_event"],
+  "ui": {
+    "controls": [
+      { "id": "loop", "label": "A-B loop", "stroke": "M 3 6 V 12 M 15 6 V 12 M 3 9 H 15" }
+    ]
+  },
+  "actions": [
+    { "id": "set-point", "label": "Set loop point" }
+  ],
+  "settings": [
+    { "type": "group", "title": "Messages", "children": [
+      { "type": "row", "children": [
+        { "type": "toggle", "id": "messages", "label": "Show the loop points on the video", "value": true }
+      ]}
+    ]}
+  ]
+}

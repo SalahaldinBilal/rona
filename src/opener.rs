@@ -75,16 +75,7 @@ fn read_playlists(sources: Vec<Source>) -> Result<PlaylistRead, String> {
     let mut start = 0;
     let mut plain = Vec::new();
     let flush_plain = |plain: &mut Vec<Source>, metas: &mut Vec<(String, Meta)>| {
-        for checked in check_sources(std::mem::take(plain)) {
-            if let Some(source) = checked.playable() {
-                let name = mpv_name(&source);
-                let meta = Meta::plain(match &source {
-                    Source::Link(url) => url.clone(),
-                    _ => name.clone(),
-                });
-                metas.push((name, meta));
-            }
-        }
+        metas.extend(check_sources(std::mem::take(plain)).iter().filter_map(Checked::meta));
     };
     for source in sources {
         let Source::Playlist(playlist) = source else {
@@ -137,16 +128,42 @@ fn problem_of(entry: &playlist_file::Entry) -> Problem {
 enum Checked {
     File(PathBuf, FileCheck),
     Link(String, LinkCheck),
+    // A plugin turned the link into a playable one, maybe with a title and headers to send with it.
+    Resolved(String, Option<String>, std::collections::BTreeMap<String, String>),
 }
 
 impl Checked {
     fn playable(&self) -> Option<Source> {
         match self {
             Checked::File(path, FileCheck::Playable) => Some(Source::File(path.clone())),
-            Checked::Link(url, LinkCheck::Playable) => Some(Source::Link(url.clone())),
+            Checked::Link(url, LinkCheck::Playable) | Checked::Resolved(url, ..) => Some(Source::Link(url.clone())),
             _ => None,
         }
     }
+
+    /// The playlist entry for a playable check, carrying what a resolving plugin added.
+    fn meta(&self) -> Option<(String, Meta)> {
+        let source = self.playable()?;
+        let name = mpv_name(&source);
+        let mut meta = Meta::plain(match &source {
+            Source::Link(url) => url.clone(),
+            _ => name.clone(),
+        });
+        if let Checked::Resolved(_, title, headers) = self {
+            meta.entry.title = title.clone();
+            meta.headers = headers.clone();
+        }
+        Some((name, meta))
+    }
+}
+
+// Plugins with open.resolve see the link first, then Rona checks it. Blocks, so only on a check thread.
+fn check_link_with_plugins(url: String) -> Checked {
+    if let Some((resolved, headers, title)) = crate::plugins::resolve_link(&url) {
+        return Checked::Resolved(resolved, title, headers);
+    }
+    let result = timed_link_check(&url);
+    Checked::Link(url, result)
 }
 
 enum Pending<'scope> {
@@ -160,10 +177,9 @@ fn check_sources(sources: Vec<Source>) -> Vec<Checked> {
         let pending: Vec<Pending> = sources
             .into_iter()
             .map(|source| match source {
-                Source::Link(url) if !media::link_has_media_extension(&url) => Pending::Checking(scope.spawn(move || {
-                    let result = timed_link_check(&url);
-                    Checked::Link(url, result)
-                })),
+                Source::Link(url) if !media::link_has_media_extension(&url) => {
+                    Pending::Checking(scope.spawn(move || check_link_with_plugins(url)))
+                }
                 source => Pending::Ready(source),
             })
             .collect();
@@ -366,38 +382,78 @@ pub fn queue_arguments(arguments: Vec<String>) {
     });
 }
 
-// A bad link only gets the failure screen when nothing else was given.
-pub fn open_arguments(arguments: &[String]) {
-    with_opener(|opener| {
-        let mut sources = Vec::new();
-        let mut bad_link = None;
-        let mut skipped = 0;
-        for argument in arguments {
-            if playlist_file::is_playlist_text(argument) {
-                sources.push(Source::Playlist(PlaylistSource::Text(argument.clone())));
-                continue;
-            }
-            if !is_link_argument(argument) {
-                sources.push(file_source(PathBuf::from(argument)));
-                continue;
-            }
-            match media::parse_link(argument) {
-                Ok(url) => sources.push(link_source(url)),
-                Err(err) => {
-                    info!("skipping argument {argument}: {}", err.message());
-                    skipped += 1;
-                    bad_link.get_or_insert_with(|| (argument.clone(), err.message().to_string()));
-                }
+fn is_plugin_package(argument: &str) -> bool {
+    !is_link_argument(argument)
+        && Path::new(argument).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(PLUGIN_EXTENSION))
+}
+
+const PLUGIN_EXTENSION: &str = crate::extensions::PLUGIN_EXTENSIONS[0];
+
+// Hands plugin packages to the install dialog and returns the other paths. Runs on the UI thread.
+fn take_plugin_packages(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let (packages, others): (Vec<PathBuf>, Vec<PathBuf>) =
+        paths.into_iter().partition(|path| is_plugin_package(&path.to_string_lossy()));
+    for package in packages {
+        crate::plugins::ui::queue_install(package, None, None);
+    }
+    others
+}
+
+struct Parsed {
+    sources: Vec<Source>,
+    bad_link: Option<(String, String)>,
+    skipped: usize,
+}
+
+// Plugin packages go to the install dialog instead of the player.
+fn parse_arguments(arguments: &[String]) -> Parsed {
+    let mut parsed = Parsed { sources: Vec::new(), bad_link: None, skipped: 0 };
+    for argument in arguments {
+        if is_plugin_package(argument) {
+            crate::plugins::ui::queue_install(PathBuf::from(argument), None, None);
+            continue;
+        }
+        if playlist_file::is_playlist_text(argument) {
+            parsed.sources.push(Source::Playlist(PlaylistSource::Text(argument.clone())));
+            continue;
+        }
+        if !is_link_argument(argument) {
+            parsed.sources.push(file_source(PathBuf::from(argument)));
+            continue;
+        }
+        match media::parse_link(argument) {
+            Ok(url) => parsed.sources.push(link_source(url)),
+            Err(err) => {
+                info!("skipping argument {argument}: {}", err.message());
+                parsed.skipped += 1;
+                parsed.bad_link.get_or_insert_with(|| (argument.clone(), err.message().to_string()));
             }
         }
-        if sources.is_empty() {
-            if let Some((argument, detail)) = bad_link {
+    }
+    parsed
+}
+
+// A bad link only gets the failure screen when nothing else was given.
+pub fn open_arguments(arguments: &[String]) {
+    let parsed = parse_arguments(arguments);
+    with_opener(|opener| {
+        if parsed.sources.is_empty() {
+            if let Some((argument, detail)) = parsed.bad_link {
                 opener.fail(FailureKind::NotPlayable, "Can't play this link", &detail, &argument, true);
             }
             return;
         }
-        opener.open_counting(sources, false, skipped);
+        opener.open_counting(parsed.sources, false, parsed.skipped);
     });
+}
+
+/// Adds paths or links to the end of the open list, for plugins.
+pub fn add_arguments(arguments: &[String]) {
+    let parsed = parse_arguments(arguments);
+    if parsed.sources.is_empty() {
+        return;
+    }
+    with_opener(|opener| opener.add(parsed.sources));
 }
 
 /// The save prompt was answered. An open waiting on it goes ahead unless it was cancelled.
@@ -501,11 +557,11 @@ impl Opener {
             debug!("dropping the checks of open request {generation}, a newer one replaced it");
             return;
         }
-        let playable: Vec<Source> = checks.iter().filter_map(Checked::playable).collect();
-        debug!("open request {generation}: {} of {} playable", playable.len(), checks.len());
-        if !playable.is_empty() {
-            self.show_skipped(skipped + checks.len() - playable.len(), quiet);
-            self.load(&playable);
+        let metas: Vec<(String, Meta)> = checks.iter().filter_map(Checked::meta).collect();
+        debug!("open request {generation}: {} of {} playable", metas.len(), checks.len());
+        if !metas.is_empty() {
+            self.show_skipped(skipped + checks.len() - metas.len(), quiet);
+            self.load_opened(Opened { document: None, metas }, 0);
             return;
         }
         if quiet {
@@ -514,7 +570,8 @@ impl Opener {
         match checks.into_iter().next() {
             Some(Checked::File(path, check)) => self.file_failed(&path, check),
             Some(Checked::Link(url, result)) => self.link_failed(&url, result),
-            None => {}
+            // Resolved links are always playable, so they never get here.
+            Some(Checked::Resolved(..)) | None => {}
         }
     }
 
@@ -574,16 +631,21 @@ impl Opener {
             let checks = check_sources(sources);
             let _ = slint::invoke_from_event_loop(move || {
                 with_opener(|opener| {
-                    let playable: Vec<Source> = checks.iter().filter_map(Checked::playable).collect();
+                    let playable: Vec<(String, Meta)> = checks.iter().filter_map(Checked::meta).collect();
                     let left_out = checks.len() - playable.len();
                     if left_out > 0 {
                         opener.osd.show(format!("Skipped {left_out} that can't be played"));
                     }
-                    for source in &playable {
-                        log_error(opener.mpv.command(&["loadfile", &mpv_name(source), "append"]));
+                    let count = playable.len();
+                    for (name, meta) in playable {
+                        playlist::add_headers(&name, &meta.headers);
+                        log_error(opener.mpv.command(&["loadfile", &name, "append"]));
+                        if meta.entry.title.is_some() {
+                            playlist::expect_added(name, meta);
+                        }
                     }
-                    if !playable.is_empty() {
-                        opener.osd.show(if playable.len() == 1 { "Added 1 entry".into() } else { format!("Added {} entries", playable.len()) });
+                    if count > 0 {
+                        opener.osd.show(if count == 1 { "Added 1 entry".into() } else { format!("Added {count} entries") });
                     }
                 });
             });
@@ -764,8 +826,10 @@ impl Opener {
                 return;
             };
             info!("picked {} files in the dialog", files.len());
-            let sources: Vec<Source> = files.into_iter().map(file_source).collect();
-            let _ = slint::invoke_from_event_loop(move || with_opener(|opener| opener.open(sources, false)));
+            let _ = slint::invoke_from_event_loop(move || {
+                let sources: Vec<Source> = take_plugin_packages(files).into_iter().map(file_source).collect();
+                with_opener(|opener| opener.open(sources, false));
+            });
         });
     }
 
@@ -962,7 +1026,7 @@ pub fn drop_handler(app: &AppWindow) -> impl FnMut(&WindowEvent) + 'static {
                 if first {
                     let dropped = dropped.clone();
                     Timer::single_shot(Duration::ZERO, move || {
-                        let paths = std::mem::take(&mut *dropped.borrow_mut());
+                        let paths = take_plugin_packages(std::mem::take(&mut *dropped.borrow_mut()));
                         info!("dropped {} files", paths.len());
                         let sources = paths.into_iter().map(file_source).collect();
                         with_opener(|opener| opener.open(sources, true));
@@ -980,7 +1044,8 @@ fn check_hovered(paths: Vec<PathBuf>, app_weak: slint::Weak<AppWindow>, hover_ge
         let playable: Vec<&PathBuf> = paths
             .iter()
             .filter(|path| {
-                playlist_file::is_playlist_name(&path.to_string_lossy()) || matches!(media::check_file(path), FileCheck::Playable)
+                let name = path.to_string_lossy();
+                playlist_file::is_playlist_name(&name) || is_plugin_package(&name) || matches!(media::check_file(path), FileCheck::Playable)
             })
             .collect();
         let (state, name) = match playable.as_slice() {

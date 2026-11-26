@@ -1,0 +1,8 @@
+target/
+node_modules/
+dist/
+plugin.wasm
+*.rp
+Cargo.lock
+package-lock.json
+!rust/Cargo.lock

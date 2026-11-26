@@ -212,6 +212,10 @@ pub fn wrap_url(source: &str) -> String {
     }
 }
 
+pub fn unwrap_url(source: &str) -> String {
+    source.strip_prefix(PROTOCOL).and_then(|rest| rest.strip_prefix("://")).unwrap_or(source).to_string()
+}
+
 static DOWNLOADED_BYTES: AtomicU64 = AtomicU64::new(0);
 static CURRENT: OnceLock<Mutex<Option<(String, Arc<Mutex<ByteCache>>)>>> = OnceLock::new();
 

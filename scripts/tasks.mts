@@ -4,6 +4,7 @@ import { deploy } from "./lib/deploy.mts";
 import { generateKeyPair, PUBLIC_KEY_PATH } from "./lib/minisign.mts";
 import { fetchMpv } from "./lib/mpv.mts";
 import { packageApp } from "./lib/package.mts";
+import { publishSdk } from "./lib/publish-sdk.mts";
 import { root, TaskError, write } from "./lib/util.mts";
 import { bump } from "./lib/version.mts";
 
@@ -14,7 +15,9 @@ Commands:
   bump <version>     Set the version in Cargo.toml and date the Unreleased section of CHANGELOG.md
   keygen <password>  Create the update signing key pair, encrypted with this password
   package            Build in release mode and package for this platform (NSIS on Windows, AppImage on Linux)
-  deploy             Upload a release from bundles/ (run by the release workflow)`;
+  deploy             Upload a release from bundles/ (run by the release workflow)
+  publish-sdk [--dry-run]
+                     Test, build and publish the plugin SDKs to crates.io and npm, skipping versions already there`;
 
 function keygen(password: string): void {
     if (password === "") {
@@ -42,6 +45,8 @@ async function main(args: string[]): Promise<void> {
         packageApp();
     } else if (command === "deploy" && rest.length === 0) {
         deploy();
+    } else if (command === "publish-sdk" && (rest.length === 0 || (rest.length === 1 && rest[0] === "--dry-run"))) {
+        await publishSdk(rest.length === 1);
     } else {
         throw new TaskError(USAGE);
     }

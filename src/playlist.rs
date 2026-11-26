@@ -323,6 +323,11 @@ pub fn starting(paths: &[String], opened: Opened) {
     });
 }
 
+/// An entry about to be appended to the open list, so it keeps details like a title once mpv lists it.
+pub fn expect_added(filename: String, meta: Meta) {
+    with_playlist(|playlist| playlist.pending.push((filename, meta)));
+}
+
 /// Whether mpv goes on after the current entry, also by starting the playlist over.
 pub fn has_next() -> bool {
     with_playlist(|playlist| {
@@ -649,6 +654,10 @@ impl Playlist {
             }
             if let Some(position) = self.pending.iter().position(|(filename, _)| *filename == entry.filename) {
                 let (_, meta) = self.pending.remove(position);
+                // Without a place in a loaded playlist, it was added to the open one.
+                if meta.order.is_none() {
+                    added_by_user = !fresh;
+                }
                 let at = meta.order.map_or(self.list.len(), |order| self.place_for_order(order));
                 self.list.insert(at, entry.id);
                 self.metas.insert(entry.id, meta);
@@ -865,6 +874,19 @@ impl Playlist {
         player.set_playlist_covers(wide || kind == Kind::Music || self.play.iter().any(|entry| media::is_audio_name(&entry.filename)));
         player.set_playlist(ModelRc::new(VecModel::from(items)));
         player.set_playlist_count(self.list.len() as i32);
+        let snapshot = self
+            .list
+            .iter()
+            .filter_map(|id| {
+                let entry = self.play.iter().find(|entry| entry.id == *id)?;
+                let title = match self.metas.get(id) {
+                    Some(meta) => self.title_of(entry, meta),
+                    None => entry.title.clone(),
+                };
+                Some(crate::plugins::PlaylistSnap { title, path: http_cache::unwrap_url(&entry.filename), current: entry.current })
+            })
+            .collect();
+        crate::plugins::set_playlist_snapshot(snapshot);
 
         let files: Vec<String> = self.play.iter().map(|entry| entry.filename.clone()).collect();
         let upcoming: Vec<String> = current

@@ -179,7 +179,8 @@ pub fn handle(text: &str, shift: bool, mpv: &Mpv, app: &AppWindow, config: &Shar
     let (action, seek_step, seek_mode) = {
         let config = config.borrow();
         let Some(index) = config.shortcuts.iter().position(|key| !key.is_empty() && *key == pressed) else {
-            return false;
+            drop(config);
+            return crate::plugins::ui::handle_key(&pressed);
         };
         let step = if shift { config.seek_long } else { config.seek_short };
         let mode = if config.seek_keyframes { "relative+keyframes" } else { "relative+exact" };

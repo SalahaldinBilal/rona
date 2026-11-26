@@ -1,0 +1,46 @@
+{
+  "name": "@rona-player/plugin",
+  "version": "1.0.0",
+  "description": "Write, build and pack Rona plugins in TypeScript (plugin API 1)",
+  "keywords": ["rona", "plugin", "extism", "wasm"],
+  "license": "GPL-3.0-or-later",
+  "author": "SalahaldinBilal",
+  "homepage": "https://github.com/SalahaldinBilal/rona/tree/main/plugin-sdk",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SalahaldinBilal/rona.git",
+    "directory": "plugin-sdk/ts"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./pack": {
+      "types": "./dist/packer.d.mts",
+      "default": "./dist/packer.mjs"
+    }
+  },
+  "bin": {
+    "rona-plugin-pack": "dist/cli.mjs"
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.mts",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.11",
+    "typescript": "^7.0.2"
+  }
+}

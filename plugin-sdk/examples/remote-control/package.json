@@ -1,0 +1,15 @@
+{
+  "name": "rona-remote-control",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "rona-plugin-pack",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@rona-player/plugin": "file:../../ts"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

@@ -235,6 +235,9 @@ pub enum Event {
 
 struct Api {
     create: unsafe extern "C" fn() -> *mut Handle,
+    create_client: unsafe extern "C" fn(*mut Handle, *const c_char) -> *mut Handle,
+    destroy: unsafe extern "C" fn(*mut Handle),
+    wakeup: unsafe extern "C" fn(*mut Handle),
     initialize: unsafe extern "C" fn(*mut Handle) -> c_int,
     set_option_string: unsafe extern "C" fn(*mut Handle, *const c_char, *const c_char) -> c_int,
     command_async: unsafe extern "C" fn(*mut Handle, u64, *mut *const c_char) -> c_int,
@@ -286,6 +289,9 @@ impl Api {
         unsafe {
             Ok(Self {
                 create: symbol(&library, b"mpv_create\0")?,
+                create_client: symbol(&library, b"mpv_create_client\0")?,
+                destroy: symbol(&library, b"mpv_destroy\0")?,
+                wakeup: symbol(&library, b"mpv_wakeup\0")?,
                 initialize: symbol(&library, b"mpv_initialize\0")?,
                 set_option_string: symbol(&library, b"mpv_set_option_string\0")?,
                 command_async: symbol(&library, b"mpv_command_async\0")?,
@@ -348,8 +354,10 @@ unsafe extern "C" fn lookup_proc_address(ctx: *mut c_void, name: *const c_char) 
 const UNNAMED_COMMAND_BIT: u64 = 1 << 63;
 
 struct Inner {
-    api: Api,
+    api: Arc<Api>,
     handle: *mut Handle,
+    // mpv_terminate_destroy on any handle quits the player, so clients only destroy themselves.
+    main: bool,
     wakeup: OnceLock<Callback>,
     next_command: AtomicU64,
     // What each queued command was, so a failure can say which one failed.
@@ -371,7 +379,11 @@ impl Inner {
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        unsafe { (self.api.terminate_destroy)(self.handle) };
+        if self.main {
+            unsafe { (self.api.terminate_destroy)(self.handle) };
+        } else {
+            unsafe { (self.api.destroy)(self.handle) };
+        }
     }
 }
 
@@ -409,8 +421,9 @@ impl Mpv {
             return Err(Error("mpv_create failed".into()));
         }
         let inner = Inner {
-            api,
+            api: Arc::new(api),
             handle,
+            main: true,
             wakeup: OnceLock::new(),
             next_command: AtomicU64::new(1),
             pending_commands: Mutex::new(HashMap::new()),
@@ -425,6 +438,29 @@ impl Mpv {
 
     pub fn downgrade(&self) -> WeakMpv {
         WeakMpv(Arc::downgrade(&self.0))
+    }
+
+    /// Another handle on the same player, with its own event queue, observed properties and OSD overlays.
+    /// Dropping it leaves the player running.
+    pub fn create_client(&self, name: &str) -> Result<Mpv, Error> {
+        let name_c = cstring(name)?;
+        let handle = unsafe { (self.0.api.create_client)(self.0.handle, name_c.as_ptr()) };
+        if handle.is_null() {
+            return Err(Error(format!("mpv_create_client failed for {name}")));
+        }
+        Ok(Self(Arc::new(Inner {
+            api: self.0.api.clone(),
+            handle,
+            main: false,
+            wakeup: OnceLock::new(),
+            next_command: AtomicU64::new(1),
+            pending_commands: Mutex::new(HashMap::new()),
+        })))
+    }
+
+    /// Makes a `wait_event` on another thread return.
+    pub fn wake(&self) {
+        unsafe { (self.0.api.wakeup)(self.0.handle) };
     }
 
     /// Queues the command without waiting for it, failures arrive later as `Event::CommandFailed`.

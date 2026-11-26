@@ -1,0 +1,33 @@
+[package]
+name = "rona-plugin"
+version = "1.0.0"
+edition = "2024"
+description = "Write, build and pack Rona plugins in Rust (plugin API 1)"
+authors = ["SalahaldinBilal"]
+license = "GPL-3.0-or-later"
+repository = "https://github.com/SalahaldinBilal/rona"
+readme = "../README.md"
+keywords = ["rona", "plugin", "extism", "wasm"]
+categories = ["wasm", "development-tools::build-utils"]
+
+# The packer: `cargo install rona-plugin`, then `rona-plugin-pack` in a plugin's folder.
+[[bin]]
+name = "rona-plugin-pack"
+path = "src/main.rs"
+required-features = ["pack"]
+
+[features]
+default = ["pack"]
+# The packer command. Only ever compiled for the machine you build on, never into a plugin.
+pack = ["dep:zip"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+extism-pdk = "1.4.1"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+semver = "1.0.28"
+zip = { version = "9.8.2", default-features = false, features = ["deflate"], optional = true }

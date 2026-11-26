@@ -1,0 +1,1509 @@
+import { Theme } from "theme.slint";
+import { Panels, ColorText } from "state.slint";
+import { Icon } from "components/icon.slint";
+import { IconButton } from "components/buttons.slint";
+import { Clickable } from "components/clickable.slint";
+import { Badge } from "components/badge.slint";
+import { Delayed, Spinner } from "components/progress.slint";
+import { TextField, Checkbox, Segmented, Select, Slider, ColorField, TextButton } from "components/form.slint";
+
+// One control in a row of a plugin view. Which fields count depends on `kind`.
+export struct PluginItem {
+    kind: string,
+    text: string,
+    tone: int,
+    value: string,
+    checked: bool,
+    number: float,
+    minimum: float,
+    maximum: float,
+    step: float,
+    options: [string],
+    index: int,
+    enabled: bool,
+    primary: bool,
+    danger: bool,
+    ghost: bool,
+    highlight: bool,
+    secret: bool,
+    numeric: bool,
+    placeholder: string,
+    has-picture: bool,
+    picture: image,
+    box-width: length,
+    box-height: length,
+    fraction: float,
+    indeterminate: bool,
+    color: color,
+    stretch: bool,
+}
+
+// A plugin view is flattened into these: headings, rows of up to 4 items, labels and list entries.
+export struct PluginRow {
+    kind: string,
+    label: string,
+    text: string,
+    tone: int,
+    items: [PluginItem],
+    stretches: bool,
+    has-picture: bool,
+    picture: image,
+}
+
+export struct PluginListItem {
+    name: string,
+    version: string,
+    status: string,
+    status-tone: int,
+    enabled: bool,
+    can-enable: bool,
+    dev: bool,
+    has-icon: bool,
+    icon: image,
+}
+
+export struct PluginGrant {
+    // Set on the first switch of each category.
+    heading: string,
+    label: string,
+    reason: string,
+    on: bool,
+    is-new: bool,
+}
+
+// kind 0 button, 1 text, 2 badge.
+export struct PluginControl {
+    kind: int,
+    label: string,
+    fill: string,
+    stroke: string,
+    text: string,
+    tone: int,
+    active: bool,
+    dot: bool,
+    highlight: bool,
+    enabled: bool,
+    // Usable while nothing plays.
+    always: bool,
+    // The plugin id, on the button that opens that plugin's panel.
+    panel-of: string,
+    // Where it ends in the slot, worked out in Rust from the measured text widths.
+    end: length,
+}
+
+export struct PluginMenuEntry {
+    label: string,
+    plugin: string,
+    has-check: bool,
+    checked: bool,
+}
+
+export struct PluginAction {
+    label: string,
+    primary: bool,
+    danger: bool,
+}
+
+export struct PluginControlPref {
+    label: string,
+    shown: bool,
+}
+
+export global PluginsUi {
+    pure public function tone(tone: int) -> color {
+        if (tone == 1) {
+            return Theme.muted;
+        }
+        if (tone == 2) {
+            return Theme.accent;
+        }
+        if (tone == 3) {
+            return Theme.success;
+        }
+        if (tone == 4) {
+            return Theme.danger;
+        }
+        return Theme.text;
+    }
+
+    pure public function lit(control: PluginControl) -> bool {
+        return control.active || (control.panel-of != "" && PluginsUi.panel-open && PluginsUi.panel-plugin == control.panel-of);
+    }
+
+    // Settings > Plugins.
+    in property <[PluginListItem]> plugins;
+    in property <string> list-message;
+    in-out property <int> selected: -1;
+    in property <string> d-name;
+    in property <string> d-version;
+    in property <string> d-author;
+    in property <string> d-description;
+    in property <string> d-homepage;
+    in property <string> d-status;
+    in property <int> d-status-tone;
+    in property <string> d-problem;
+    in property <bool> d-enabled;
+    in property <bool> d-can-enable;
+    in property <bool> d-dev;
+    in property <bool> d-has-icon;
+    in property <image> d-icon;
+    in property <[PluginGrant]> d-grants;
+    in property <[PluginRow]> d-static-rows;
+    in property <[PluginRow]> d-rows;
+    in property <bool> d-has-view;
+    in property <string> d-log;
+    callback select(int);
+    callback set-enabled(int, bool);
+    callback set-grant(int, bool);
+    callback uninstall(bool);
+    callback reload-dev();
+    callback install-file();
+    callback load-folder();
+    callback open-link(string);
+
+    // Slots: 0 the plugin's settings view, 1 panel, 2 popover, 3 dialog, 4 the manifest's settings.
+    // Row and item are places in that slot's rows, item -1 for the row itself.
+    callback view-event(int, int, int, string, string);
+
+    // Buttons and text, in the order the user set.
+    in property <[PluginControl]> controls;
+    in property <length> controls-width;
+    in property <[PluginControl]> badges;
+    in property <[PluginMenuEntry]> menu;
+    callback text-measured(string, length);
+    callback control-clicked(int, bool);
+    callback menu-clicked(int);
+
+    in-out property <bool> popover-open;
+    in property <string> popover-title;
+    in property <[PluginRow]> popover-rows;
+    in-out property <length> popover-x;
+
+    in-out property <bool> panel-open;
+    in property <string> panel-plugin;
+    in property <string> panel-title;
+    in property <[PluginRow]> panel-rows;
+    callback close-panel();
+
+    in-out property <bool> dialog-open;
+    in property <string> dialog-title;
+    in property <[PluginRow]> dialog-rows;
+    in property <[PluginAction]> dialog-actions;
+    callback dialog-action(int);
+    callback dialog-close();
+
+    in-out property <bool> install-open;
+    in property <string> i-title;
+    in property <string> i-name;
+    in property <string> i-version;
+    in property <string> i-author;
+    in property <string> i-description;
+    in property <string> i-requester;
+    in property <string> i-note;
+    in property <string> i-error;
+    in property <bool> i-ready;
+    in property <[PluginGrant]> i-grants;
+    callback i-set-grant(int, bool);
+    callback install-answer(bool);
+
+    in property <[PluginMenuEntry]> row-menu;
+    callback row-menu-clicked(int, int);
+
+    in property <[PluginControlPref]> control-prefs;
+    callback control-pref-shown(int, bool);
+    callback control-pref-move(int, int);
+}
+
+component SectionHeading inherits Text {
+    color: Theme.muted;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+component ItemView inherits Rectangle {
+    in property <PluginItem> item;
+    callback event(string, string);
+
+    property <bool> stretches: root.item.stretch;
+    horizontal-stretch: root.stretches ? 1 : 0;
+    preferred-width: layout.preferred-width;
+    min-height: layout.min-height;
+
+    layout := VerticalLayout {
+        alignment: center;
+
+        if root.item.kind == "label": Text {
+            text: root.item.text;
+            color: PluginsUi.tone(root.item.tone);
+            font-size: 12px;
+            vertical-alignment: center;
+            wrap: word-wrap;
+        }
+
+        if root.item.kind == "badge": HorizontalLayout {
+            alignment: start;
+
+            Badge {
+                text: root.item.text;
+                highlight: root.item.highlight;
+            }
+        }
+
+        if root.item.kind == "button": TextButton {
+            height: 30px;
+            text: root.item.text;
+            primary: root.item.primary;
+            danger: root.item.danger;
+            ghost: root.item.ghost;
+            enabled: root.item.enabled;
+            clicked => { root.event("click", ""); }
+        }
+
+        if root.item.kind == "toggle": Checkbox {
+            text: root.item.text;
+            checked: root.item.checked;
+            enabled: root.item.enabled;
+            toggled => { root.event("change", self.checked ? "true" : "false"); }
+        }
+
+        if root.item.kind == "select": Select {
+            options: root.item.options;
+            current-index: root.item.index;
+            enabled: root.item.enabled;
+            selected => { root.event("change", self.current-index); }
+        }
+
+        if root.item.kind == "segmented": Segmented {
+            options: root.item.options;
+            current-index: root.item.index;
+            enabled: root.item.enabled;
+            selected => { root.event("change", self.current-index); }
+        }
+
+        if root.item.kind == "slider": HorizontalLayout {
+            spacing: 10px;
+
+            slider := Slider {
+                horizontal-stretch: 1;
+                value: root.item.number;
+                minimum: root.item.minimum;
+                maximum: root.item.maximum;
+                step: root.item.step;
+                released => { root.event("change", self.value); }
+            }
+
+            Text {
+                width: 52px;
+                text: (round(slider.value * 100) / 100) + root.item.text;
+                color: Theme.text;
+                font-size: 12px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
+
+        if root.item.kind == "text": TextField {
+            text: root.item.value;
+            placeholder: root.item.placeholder;
+            enabled: root.item.enabled;
+            secret: root.item.secret;
+            numeric: root.item.numeric;
+            optional: true;
+            edited => { root.event("input", self.text); }
+            finished => { root.event("change", self.text); }
+            accepted => { root.event("submit", self.text); }
+        }
+
+        if root.item.kind == "color": ColorField {
+            value: root.item.color;
+            enabled: root.item.enabled;
+            edited => { root.event("input", ColorText.format(self.value)); }
+        }
+
+        if root.item.kind == "progress" && !root.item.indeterminate: Rectangle {
+            height: 4px;
+            border-radius: 2px;
+            background: #ffffff1a;
+
+            Rectangle {
+                x: 0;
+                width: parent.width * root.item.fraction;
+                animate width { duration: Theme.hover-duration; }
+                border-radius: 2px;
+                background: Theme.accent;
+            }
+        }
+
+        if root.item.kind == "progress" && root.item.indeterminate: HorizontalLayout {
+            alignment: start;
+
+            Delayed {
+                show: true;
+                width: 18px;
+                height: 18px;
+
+                Spinner {}
+            }
+        }
+
+        if root.item.kind == "image": HorizontalLayout {
+            alignment: start;
+
+            Rectangle {
+                width: root.item.box-width;
+                height: root.item.box-height;
+                border-radius: 6px;
+                background: #ffffff0a;
+                clip: true;
+
+                if root.item.has-picture: Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.item.picture;
+                    image-fit: cover;
+                }
+
+                Clickable {
+                    clicked => { root.event("click", ""); }
+                }
+            }
+        }
+
+        if root.item.kind == "link": HorizontalLayout {
+            alignment: start;
+
+            link := Text {
+                text: root.item.text;
+                color: link-area.has-hover ? Theme.accent-hover : Theme.accent;
+                font-size: 12px;
+                vertical-alignment: center;
+
+                link-area := Clickable {
+                    clicked => { root.event("click", ""); }
+                }
+            }
+        }
+    }
+}
+
+// Draws the rows of one plugin view. Scrolling is up to the place that holds it.
+export component PluginView inherits VerticalLayout {
+    in property <[PluginRow]> rows;
+    in property <int> slot;
+
+    spacing: 10px;
+
+    for row[row-index] in root.rows: VerticalLayout {
+        spacing: 10px;
+
+        if row.kind == "heading": VerticalLayout {
+            padding-top: row-index > 0 ? 4px : 0px;
+
+            SectionHeading { text: row.label.to-uppercase(); }
+        }
+
+        if row.kind == "subheading": Text {
+            text: row.label;
+            color: Theme.text;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        if row.kind == "label": Text {
+            text: row.text;
+            color: PluginsUi.tone(row.tone);
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        if row.kind == "separator": Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+
+        if row.kind == "empty": Rectangle {
+            height: 96px;
+
+            Text {
+                width: parent.width - 24px;
+                text: row.text;
+                color: Theme.muted;
+                font-size: 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+
+        if row.kind == "row": VerticalLayout {
+            spacing: 4px;
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                if row.label != "": Text {
+                    width: 150px;
+                    text: row.label;
+                    color: Theme.muted;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                for item[item-index] in row.items: ItemView {
+                    item: item;
+                    event(kind, value) => { PluginsUi.view-event(root.slot, row-index, item-index, kind, value); }
+                }
+
+                if !row.stretches: Rectangle { horizontal-stretch: 1; }
+            }
+
+            if row.text != "": Text {
+                text: row.text;
+                color: Theme.muted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+        }
+
+        if row.kind == "entry": Rectangle {
+            height: 48px;
+            border-radius: 6px;
+            background: entry-area.pressed ? Theme.pressed : entry-area.has-hover ? Theme.hover : transparent;
+            animate background { duration: Theme.hover-duration; }
+
+            entry-area := Clickable {
+                clicked => { PluginsUi.view-event(root.slot, row-index, -1, "click", ""); }
+            }
+
+            HorizontalLayout {
+                padding-left: 6px;
+                padding-right: 6px;
+                spacing: 10px;
+
+                if row.has-picture: VerticalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 5px;
+                        clip: true;
+
+                        Image {
+                            width: parent.width;
+                            height: parent.height;
+                            source: row.picture;
+                            image-fit: cover;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 1px;
+
+                    Text {
+                        text: row.label;
+                        color: Theme.text;
+                        font-size: 13px;
+                        overflow: elide;
+                    }
+
+                    if row.text != "": Text {
+                        text: row.text;
+                        color: Theme.muted;
+                        font-size: 11px;
+                        overflow: elide;
+                    }
+                }
+
+                for item[item-index] in row.items: VerticalLayout {
+                    alignment: center;
+
+                    TextButton {
+                        height: 28px;
+                        text: item.text;
+                        ghost: true;
+                        clicked => { PluginsUi.view-event(root.slot, row-index, item-index, "click", ""); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component ViewPage inherits Flickable {
+    in property <[PluginRow]> rows;
+    in property <int> slot;
+    in property <length> inset: 16px;
+
+    content-height: content.preferred-height;
+
+    content := VerticalLayout {
+        width: root.width;
+        padding: root.inset;
+        padding-top: root.inset - 2px;
+        alignment: start;
+
+        PluginView {
+            rows: root.rows;
+            slot: root.slot;
+        }
+    }
+}
+
+export component PluginPanel inherits Rectangle {
+    background: Theme.panel;
+
+    Rectangle {
+        x: 0;
+        width: 1px;
+        background: Theme.line;
+    }
+
+    VerticalLayout {
+        Rectangle {
+            height: 40px;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 4px;
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: PluginsUi.panel-title;
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    IconButton {
+                        clicked => { PluginsUi.close-panel(); }
+
+                        Icon {
+                            stroke-commands: "M 5 5 L 13 13 M 13 5 L 5 13";
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+        }
+
+        ViewPage {
+            vertical-stretch: 1;
+            rows: PluginsUi.panel-rows;
+            slot: 1;
+            inset: 14px;
+        }
+    }
+}
+
+export component PluginPopover inherits Rectangle {
+    in property <bool> open;
+    in property <length> available-height;
+    property <length> content-height: body.preferred-height + 40px;
+
+    width: 320px;
+    height: min(root.available-height, max(80px, root.content-height));
+    opacity: root.open ? 1 : 0;
+    visible: self.opacity > 0;
+    animate opacity { duration: Theme.fade-duration; easing: ease-out; }
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.line;
+    background: Theme.panel;
+    drop-shadow-blur: 18px;
+    drop-shadow-color: #00000080;
+    clip: true;
+
+    TouchArea {}
+
+    VerticalLayout {
+        Rectangle {
+            height: 34px;
+
+            Text {
+                x: 12px;
+                width: parent.width - 24px;
+                text: PluginsUi.popover-title;
+                color: Theme.muted;
+                font-size: 11px;
+                font-weight: 600;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        Flickable {
+            vertical-stretch: 1;
+            content-height: body.preferred-height;
+
+            body := VerticalLayout {
+                width: parent.width;
+                padding: 12px;
+                padding-top: 0px;
+                alignment: start;
+
+                PluginView {
+                    rows: PluginsUi.popover-rows;
+                    slot: 2;
+                }
+            }
+        }
+    }
+}
+
+component Frame inherits Rectangle {
+    in property <string> title;
+    in property <length> box-width: 520px;
+    in property <length> box-height: 460px;
+    callback dismiss();
+
+    background: #00000080;
+
+    TouchArea {
+        clicked => { root.dismiss(); }
+    }
+
+    Rectangle {
+        width: min(root.box-width, root.width - 32px);
+        height: min(root.box-height, root.height - 32px);
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.line;
+        background: Theme.chrome;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000099;
+        clip: true;
+
+        TouchArea {
+            clicked => { Panels.focus-requests += 1; }
+        }
+
+        VerticalLayout {
+            Rectangle {
+                height: 40px;
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 4px;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.title;
+                        color: Theme.text;
+                        font-size: 13px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        IconButton {
+                            clicked => { root.dismiss(); }
+
+                            Icon {
+                                stroke-commands: "M 5 5 L 13 13 M 13 5 L 5 13";
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.line;
+                }
+            }
+
+            @children
+        }
+    }
+}
+
+component Footer inherits Rectangle {
+    height: 52px;
+
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: Theme.line;
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 8px;
+
+        @children
+    }
+}
+
+export component PluginDialog inherits Frame {
+    title: PluginsUi.dialog-title;
+    dismiss => {
+        PluginsUi.dialog-close();
+        Panels.focus-requests += 1;
+    }
+
+    ViewPage {
+        vertical-stretch: 1;
+        rows: PluginsUi.dialog-rows;
+        slot: 3;
+    }
+
+    Footer {
+        VerticalLayout {
+            alignment: center;
+
+            TextButton {
+                text: "Close";
+                ghost: true;
+                clicked => {
+                    PluginsUi.dialog-close();
+                    Panels.focus-requests += 1;
+                }
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        for action[index] in PluginsUi.dialog-actions: VerticalLayout {
+            alignment: center;
+
+            TextButton {
+                text: action.label;
+                primary: action.primary;
+                danger: action.danger;
+                clicked => { PluginsUi.dialog-action(index); }
+            }
+        }
+    }
+}
+
+component GrantList inherits VerticalLayout {
+    in property <[PluginGrant]> grants;
+    in property <bool> enabled: true;
+    callback toggled(int, bool);
+
+    spacing: 6px;
+
+    for grant[index] in root.grants: VerticalLayout {
+        spacing: 2px;
+
+        if grant.heading != "": VerticalLayout {
+            padding-top: index > 0 ? 8px : 0px;
+            padding-bottom: 2px;
+
+            Text {
+                text: grant.heading;
+                color: Theme.text;
+                font-size: 12px;
+                font-weight: 600;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            Checkbox {
+                horizontal-stretch: 1;
+                text: grant.label;
+                checked: grant.on;
+                enabled: root.enabled;
+                toggled => { root.toggled(index, self.checked); }
+            }
+
+            if grant.is-new: VerticalLayout {
+                alignment: center;
+
+                Badge {
+                    text: "New";
+                    highlight: true;
+                }
+            }
+        }
+
+        if grant.reason != "": HorizontalLayout {
+            padding-left: 24px;
+
+            Text {
+                text: grant.reason;
+                color: Theme.muted;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+export component InstallDialog inherits Frame {
+    title: PluginsUi.i-title;
+    box-width: 480px;
+    box-height: 520px;
+    dismiss => {
+        PluginsUi.install-answer(false);
+        Panels.focus-requests += 1;
+    }
+
+    Flickable {
+        vertical-stretch: 1;
+        content-height: body.preferred-height;
+
+        body := VerticalLayout {
+            width: parent.width;
+            padding: 16px;
+            padding-top: 14px;
+            spacing: 10px;
+            alignment: start;
+
+            VerticalLayout {
+                spacing: 2px;
+
+                Text {
+                    text: PluginsUi.i-name + (PluginsUi.i-version != "" ? "  " + PluginsUi.i-version : "");
+                    color: Theme.text;
+                    font-size: 14px;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+
+                if PluginsUi.i-author != "": Text {
+                    text: "By " + PluginsUi.i-author;
+                    color: Theme.muted;
+                    font-size: 12px;
+                }
+            }
+
+            if PluginsUi.i-description != "": Text {
+                text: PluginsUi.i-description;
+                color: Theme.text;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+
+            if PluginsUi.i-requester != "": Text {
+                text: "Requested by " + PluginsUi.i-requester;
+                color: Theme.warning;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+
+            if PluginsUi.i-note != "": Text {
+                text: PluginsUi.i-note;
+                color: Theme.muted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+
+            if PluginsUi.i-error != "": Text {
+                text: PluginsUi.i-error;
+                color: Theme.danger;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+
+            if PluginsUi.i-grants.length > 0: VerticalLayout {
+                spacing: 8px;
+
+                SectionHeading { text: "PERMISSIONS"; }
+
+                Text {
+                    text: "Turn off what you don't want it to do. You can change these later in Settings > Plugins.";
+                    color: Theme.muted;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+
+                GrantList {
+                    grants: PluginsUi.i-grants;
+                    toggled(index, on) => { PluginsUi.i-set-grant(index, on); }
+                }
+            }
+        }
+    }
+
+    Footer {
+        Rectangle { horizontal-stretch: 1; }
+
+        VerticalLayout {
+            alignment: center;
+
+            TextButton {
+                text: "Cancel";
+                ghost: true;
+                clicked => {
+                    PluginsUi.install-answer(false);
+                    Panels.focus-requests += 1;
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            TextButton {
+                width: 90px;
+                text: PluginsUi.i-version != "" && PluginsUi.i-title == "Update plugin" ? "Update" : "Install";
+                primary: true;
+                enabled: PluginsUi.i-ready;
+                clicked => {
+                    PluginsUi.install-answer(true);
+                    Panels.focus-requests += 1;
+                }
+            }
+        }
+    }
+}
+
+component PluginIcon inherits Rectangle {
+    in property <bool> has-icon;
+    in property <image> icon;
+
+    width: 32px;
+    height: 32px;
+    border-radius: 7px;
+    background: #ffffff0d;
+    clip: true;
+
+    if root.has-icon: Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.icon;
+        image-fit: cover;
+    }
+
+    if !root.has-icon: Icon {
+        width: 16px;
+        height: 16px;
+        tint: Theme.muted;
+        stroke-commands: "M 7 2.5 H 11 V 5 A 1.5 1.5 0 0 0 14 5 H 15.5 V 9 A 1.5 1.5 0 0 0 15.5 12 V 15.5 H 2.5 V 12 A 1.5 1.5 0 0 0 2.5 9 V 5 H 7 Z";
+    }
+}
+
+component PluginEntry inherits Rectangle {
+    in property <PluginListItem> plugin;
+    callback clicked();
+    callback toggled(bool);
+
+    height: 52px;
+    border-radius: 6px;
+    background: area.pressed ? Theme.pressed : area.has-hover ? Theme.hover : transparent;
+    animate background { duration: Theme.hover-duration; }
+
+    area := Clickable {
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+
+        VerticalLayout {
+            alignment: center;
+
+            PluginIcon {
+                has-icon: root.plugin.has-icon;
+                icon: root.plugin.icon;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: root.plugin.name + "  " + root.plugin.version + (root.plugin.dev ? "  (from a folder)" : "");
+                color: Theme.text;
+                font-size: 13px;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.plugin.status;
+                color: PluginsUi.tone(root.plugin.status-tone);
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            Checkbox {
+                width: 18px;
+                checked: root.plugin.enabled;
+                enabled: root.plugin.can-enable;
+                toggled => { root.toggled(self.checked); }
+            }
+        }
+    }
+}
+
+component PluginDetail inherits VerticalLayout {
+    property <bool> uninstall-armed;
+    property <bool> delete-data;
+    property <int> selected: PluginsUi.selected;
+    changed selected => {
+        self.uninstall-armed = false;
+        self.delete-data = false;
+    }
+
+    spacing: 10px;
+
+    HorizontalLayout {
+        alignment: start;
+
+        TextButton {
+            height: 28px;
+            text: "All plugins";
+            ghost: true;
+            clicked => { PluginsUi.select(-1); }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 12px;
+
+        VerticalLayout {
+            alignment: center;
+
+            PluginIcon {
+                width: 40px;
+                height: 40px;
+                has-icon: PluginsUi.d-has-icon;
+                icon: PluginsUi.d-icon;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: PluginsUi.d-name + "  " + PluginsUi.d-version;
+                color: Theme.text;
+                font-size: 14px;
+                font-weight: 600;
+                overflow: elide;
+            }
+
+            Text {
+                text: (PluginsUi.d-author != "" ? "By " + PluginsUi.d-author + ". " : "") + PluginsUi.d-status;
+                color: PluginsUi.tone(PluginsUi.d-status-tone);
+                font-size: 12px;
+                overflow: elide;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            Checkbox {
+                width: self.natural-width;
+                text: "On";
+                checked: PluginsUi.d-enabled;
+                enabled: PluginsUi.d-can-enable;
+                toggled => { PluginsUi.set-enabled(PluginsUi.selected, self.checked); }
+            }
+        }
+    }
+
+    if PluginsUi.d-description != "": Text {
+        text: PluginsUi.d-description;
+        color: Theme.text;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+
+    if PluginsUi.d-problem != "": Text {
+        text: PluginsUi.d-problem;
+        color: Theme.danger;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+
+    if PluginsUi.d-homepage != "": HorizontalLayout {
+        alignment: start;
+
+        Text {
+            text: PluginsUi.d-homepage;
+            color: home-area.has-hover ? Theme.accent-hover : Theme.accent;
+            font-size: 12px;
+
+            home-area := Clickable {
+                clicked => { PluginsUi.open-link(PluginsUi.d-homepage); }
+            }
+        }
+    }
+
+    if PluginsUi.d-grants.length > 0: VerticalLayout {
+        spacing: 8px;
+        padding-top: 4px;
+
+        SectionHeading { text: "PERMISSIONS"; }
+
+        GrantList {
+            grants: PluginsUi.d-grants;
+            toggled(index, on) => { PluginsUi.set-grant(index, on); }
+        }
+    }
+
+    if PluginsUi.d-static-rows.length > 0 || PluginsUi.d-rows.length > 0: VerticalLayout {
+        spacing: 10px;
+        padding-top: 4px;
+
+        PluginView {
+            rows: PluginsUi.d-static-rows;
+            slot: 4;
+        }
+
+        PluginView {
+            rows: PluginsUi.d-rows;
+            slot: 0;
+        }
+    }
+
+    VerticalLayout {
+        spacing: 6px;
+        padding-top: 4px;
+
+        SectionHeading { text: "LOG"; }
+
+        Rectangle {
+            height: 140px;
+            border-radius: 6px;
+            background: #0000002e;
+            clip: true;
+
+            Flickable {
+                x: 8px;
+                y: 6px;
+                width: parent.width - 16px;
+                height: parent.height - 12px;
+                content-height: log-text.preferred-height;
+                content-y: min(0px, self.height - self.content-height);
+
+                log-text := Text {
+                    width: parent.width;
+                    text: PluginsUi.d-log != "" ? PluginsUi.d-log : "Nothing logged yet.";
+                    color: PluginsUi.d-log != "" ? Theme.text : Theme.muted;
+                    font-size: 11px;
+                    font-family: "Consolas";
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+        padding-top: 4px;
+
+        if PluginsUi.d-dev: TextButton {
+            text: "Reload from folder";
+            clicked => { PluginsUi.reload-dev(); }
+        }
+
+        TextButton {
+            text: root.uninstall-armed ? "Click again to remove" : PluginsUi.d-dev ? "Remove" : "Uninstall";
+            danger: root.uninstall-armed;
+            clicked => {
+                if (root.uninstall-armed) {
+                    root.uninstall-armed = false;
+                    PluginsUi.uninstall(root.delete-data);
+                } else {
+                    root.uninstall-armed = true;
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            Checkbox {
+                text: "Also delete its saved data";
+                checked <=> root.delete-data;
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+    }
+}
+
+export component PluginsPage inherits Flickable {
+    content-height: content.preferred-height;
+
+    content := VerticalLayout {
+        width: root.width;
+        padding: 16px;
+        padding-top: 14px;
+        spacing: 10px;
+        alignment: start;
+
+        if PluginsUi.selected < 0: VerticalLayout {
+            spacing: 10px;
+
+            SectionHeading { text: "INSTALLED"; }
+
+            if PluginsUi.plugins.length == 0: Rectangle {
+                height: 72px;
+
+                Text {
+                    text: "No plugins yet. Install one from a .rp file.";
+                    color: Theme.muted;
+                    font-size: 13px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 2px;
+
+                for plugin[index] in PluginsUi.plugins: PluginEntry {
+                    plugin: plugin;
+                    clicked => { PluginsUi.select(index); }
+                    toggled(on) => { PluginsUi.set-enabled(index, on); }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                TextButton {
+                    text: "Install from file";
+                    primary: true;
+                    clicked => { PluginsUi.install-file(); }
+                }
+
+                TextButton {
+                    text: "Load from folder";
+                    clicked => { PluginsUi.load-folder(); }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            if PluginsUi.list-message != "": Text {
+                text: PluginsUi.list-message;
+                color: Theme.danger;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+
+            Text {
+                text: "Plugins only do what their permissions allow, and each one can be turned off. Load from folder is for plugin authors: it runs a plugin straight from its build folder.";
+                color: Theme.muted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+        }
+
+        if PluginsUi.selected >= 0: PluginDetail {}
+    }
+}
+
+/// Measures the text controls for `place_controls` in Rust. It draws nothing.
+export component PluginTextMeasure inherits Rectangle {
+    width: 0px;
+    height: 0px;
+    visible: false;
+
+    for control in PluginsUi.controls: Text {
+        text: control.text;
+        font-size: 13px;
+        font-weight: 600;
+        init => { PluginsUi.text-measured(self.text, self.preferred-width); }
+        changed preferred-width => { PluginsUi.text-measured(self.text, self.preferred-width); }
+    }
+}
+
+/// Plugin controls in the control bar, those that end within `room`. The rest go in the Plugins menu.
+export component PluginControlSlot inherits HorizontalLayout {
+    in property <bool> shown;
+    in property <bool> has-file;
+    in property <length> room;
+
+    for control[index] in PluginsUi.controls: HorizontalLayout {
+        property <bool> usable: control.enabled && (root.has-file || control.always);
+        property <bool> fits: control.end <= root.room;
+
+        padding-left: index > 0 && fits ? 2px : 0px;
+
+        if fits && control.kind == 0: IconButton {
+            enabled: root.shown && usable;
+            opacity: usable ? 1 : 0.32;
+            active: PluginsUi.lit(control);
+            clicked => {
+                PluginsUi.popover-x = self.absolute-position.x;
+                PluginsUi.control-clicked(index, false);
+            }
+            right-clicked => { PluginsUi.control-clicked(index, true); }
+
+            Icon {
+                tint: control.tone == 4 ? Theme.danger : PluginsUi.lit(control) ? Theme.accent : PluginsUi.tone(control.tone);
+                fill-commands: control.fill;
+                stroke-commands: control.stroke;
+            }
+
+            if control.dot: Rectangle {
+                x: parent.width - 12px;
+                y: 6px;
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: Theme.accent;
+            }
+        }
+
+        if fits && control.kind == 1: IconButton {
+            width: max(36px, label.preferred-width + 14px);
+            enabled: root.shown && usable;
+            opacity: usable ? 1 : 0.32;
+            active: control.active;
+            clicked => {
+                PluginsUi.popover-x = self.absolute-position.x;
+                PluginsUi.control-clicked(index, false);
+            }
+            right-clicked => { PluginsUi.control-clicked(index, true); }
+
+            label := Text {
+                text: control.text;
+                color: control.active ? Theme.accent : PluginsUi.tone(control.tone);
+                font-size: 13px;
+                font-weight: 600;
+            }
+        }
+    }
+}
+
+export component PluginBadges inherits HorizontalLayout {
+    spacing: 3px;
+
+    for control in PluginsUi.badges: HorizontalLayout {
+        if control.text != "": Badge {
+            text: control.text;
+            highlight: control.highlight;
+        }
+    }
+}
+
+component MenuRow inherits Rectangle {
+    in property <string> label;
+    in property <string> sublabel;
+    in property <bool> has-check;
+    in property <bool> checked;
+    callback clicked();
+
+    height: 32px;
+    border-radius: 6px;
+    background: area.pressed ? Theme.pressed : area.has-hover ? Theme.hover : transparent;
+    animate background { duration: Theme.hover-duration; }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+
+        VerticalLayout {
+            alignment: center;
+
+            Icon {
+                width: 14px;
+                height: 14px;
+                viewbox: 14;
+                tint: Theme.accent;
+                stroke-commands: root.has-check && root.checked ? "M 2 7.5 L 5.5 11 L 12 3.5" : "";
+            }
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.label;
+            color: Theme.text;
+            font-size: 13px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.sublabel;
+            color: Theme.muted;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+    }
+
+    area := Clickable {
+        clicked => { root.clicked(); }
+    }
+}
+
+/// The Plugins button: menu entries from plugins and the controls that didn't fit in the bar.
+export component PluginMenuButton inherits IconButton {
+    in property <length> room;
+
+    clicked => { popup.show(); }
+
+    Icon {
+        stroke-commands: "M 7 2.5 H 11 V 5 A 1.5 1.5 0 0 0 14 5 H 15.5 V 9 A 1.5 1.5 0 0 0 15.5 12 V 15.5 H 2.5 V 12 A 1.5 1.5 0 0 0 2.5 9 V 5 H 7 Z";
+    }
+
+    popup := PopupWindow {
+        x: root.width - 260px;
+        y: -self.height - 6px;
+        width: 260px;
+        height: list.preferred-height;
+
+        Rectangle {
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.line;
+            background: Theme.panel;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #00000080;
+
+            list := VerticalLayout {
+                padding: 5px;
+
+                for entry[index] in PluginsUi.menu: MenuRow {
+                    label: entry.label;
+                    sublabel: entry.plugin;
+                    has-check: entry.has-check;
+                    checked: entry.checked;
+                    clicked => { PluginsUi.menu-clicked(index); }
+                }
+
+                for control[index] in PluginsUi.controls: VerticalLayout {
+                    if control.end > root.room: MenuRow {
+                        label: control.label + (control.kind == 1 && control.text != "" ? " (" + control.text + ")" : "");
+                        has-check: true;
+                        checked: PluginsUi.lit(control);
+                        clicked => {
+                            PluginsUi.popover-x = root.absolute-position.x - 280px;
+                            PluginsUi.control-clicked(index, false);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

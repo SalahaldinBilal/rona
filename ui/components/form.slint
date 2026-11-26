@@ -16,10 +16,14 @@ export component TextField inherits Rectangle {
     in property <bool> optional;
     // For rules the field can't know, worked out by the owner from `draft`.
     in property <bool> valid: true;
+    // Hides what is typed, for tokens and passwords.
+    in property <bool> secret;
     out property <string> draft: root.text;
     out property <bool> invalid: !root.valid || (root.numeric && !root.number-accepted);
     callback edited();
     callback accepted();
+    // Focus left the field, with `text` at its last valid value.
+    callback finished();
 
     accepted => { Panels.focus-requests += 1; }
 
@@ -41,6 +45,7 @@ export component TextField inherits Rectangle {
     changed focused => {
         if (!root.focused) {
             root.draft = root.text;
+            root.finished();
         }
     }
 
@@ -82,6 +87,7 @@ export component TextField inherits Rectangle {
             text <=> root.draft;
             enabled: root.enabled;
             single-line: true;
+            input-type: root.secret ? InputType.password : InputType.text;
             color: root.enabled ? Theme.text : Theme.muted;
             animate color { duration: Theme.hover-duration; }
             font-size: 13px;
@@ -111,6 +117,7 @@ export component Checkbox inherits Rectangle {
     in property <string> text;
     in-out property <bool> checked;
     in property <bool> enabled: true;
+    out property <length> natural-width: row.preferred-width;
     callback toggled();
 
     height: 28px;
@@ -298,6 +305,8 @@ export component Slider inherits Rectangle {
     in property <float> maximum: 100;
     in property <float> step: 1;
     callback edited();
+    // The drag or click ended.
+    callback released();
 
     property <float> fraction: max(0, min(1, (root.value - root.minimum) / (root.maximum - root.minimum)));
     property <length> knob-size: 12px;
@@ -341,6 +350,9 @@ export component Slider inherits Rectangle {
         pointer-event(event) => {
             if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
                 root.set-from(self.mouse-x);
+            }
+            if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                root.released();
             }
         }
         moved => { root.set-from(self.mouse-x); }

@@ -1,0 +1,19 @@
+{
+  "apiVersion": 1,
+  "id": "com.rona.examples.remote-control",
+  "name": "Remote control",
+  "version": "1.0.0",
+  "author": "Rona",
+  "description": "Lets programs on this computer pause, play and seek in Rona. They send commands like toggle, next or seek through Rona's plugin pipe, or with rona --plugin-send.",
+  "permissions": {
+    "ipc.serve": "Takes commands from programs on this computer",
+    "playback.read": "Answers with where playback is",
+    "playback.control": "Pauses, plays and seeks when asked",
+    "media.metadata": "Answers with the title of what plays",
+    "ui.panel": "Shows which programs are connected"
+  },
+  "hooks": ["on_event", "ui_render", "ui_event", "ipc_accept"],
+  "ui": {
+    "panel": { "title": "Remote control", "stroke": "M 5 2.5 H 13 V 15.5 H 5 Z M 7.5 5.5 H 10.5 M 9 12 V 12.5" }
+  }
+}

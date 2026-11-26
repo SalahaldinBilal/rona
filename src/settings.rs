@@ -574,16 +574,33 @@ fn write_audio_devices(ui: &SettingsUi, devices: &[AudioDevice], current: &str) 
     ui.set_audio_device(index as i32);
 }
 
+// Rona's own actions, then those of plugins, which keep their keys in the plugin database.
 fn shortcut_model(config: &Config) -> ModelRc<ShortcutItem> {
-    let items: Vec<ShortcutItem> = Action::ALL
+    let key_text = |key: &str| if key.is_empty() { SharedString::new() } else { shortcuts::key_name(key).into() };
+    let mut items: Vec<ShortcutItem> = Action::ALL
         .iter()
         .zip(&config.shortcuts)
-        .map(|(action, key)| ShortcutItem {
-            action: action.label().into(),
-            key: if key.is_empty() { SharedString::new() } else { shortcuts::key_name(key).into() },
-        })
+        .map(|(action, key)| ShortcutItem { action: action.label().into(), key: key_text(key) })
         .collect();
+    items.extend(
+        crate::plugins::ui::shortcut_rows().into_iter().map(|(label, key)| ShortcutItem { action: label.into(), key: key_text(&key) }),
+    );
     ModelRc::new(VecModel::from(items))
+}
+
+thread_local! {
+    static SHORTCUT_PAGE: RefCell<Option<(slint::Weak<AppWindow>, SharedConfig)>> = const { RefCell::new(None) };
+}
+
+/// Shows the plugin shortcuts again, after a plugin started, stopped or changed its permissions.
+pub fn refresh_shortcuts() {
+    SHORTCUT_PAGE.with(|slot| {
+        if let Some((app_weak, config)) = slot.borrow().as_ref()
+            && let Some(app) = app_weak.upgrade()
+        {
+            app.global::<SettingsUi>().set_shortcuts(shortcut_model(&config.borrow()));
+        }
+    });
 }
 
 // A renderer saved on another platform that this one lacks shows as Auto.
@@ -801,6 +818,7 @@ pub fn wire(mpv: &Mpv, app: &AppWindow, config: &SharedConfig) {
     });
 
     ui.on_valid_speeds(|text| parse_speeds(&text).is_some());
+    SHORTCUT_PAGE.with(|slot| *slot.borrow_mut() = Some((app.as_weak(), config.clone())));
 
     let (app_weak, bind_config) = (app.as_weak(), config.clone());
     ui.on_bind_key(move |index, text| {
@@ -809,13 +827,16 @@ pub fn wire(mpv: &Mpv, app: &AppWindow, config: &SharedConfig) {
         }
         let key = shortcuts::normalize(&text);
         let mut config = bind_config.borrow_mut();
-        let Some(index) = usize::try_from(index).ok().filter(|index| *index < config.shortcuts.len()) else {
-            return true;
-        };
+        let Ok(index) = usize::try_from(index) else { return true };
         for existing in config.shortcuts.iter_mut().filter(|existing| **existing == key) {
             existing.clear();
         }
-        config.shortcuts[index] = key;
+        if index < config.shortcuts.len() {
+            crate::plugins::ui::release_key(&key);
+            config.shortcuts[index] = key;
+        } else {
+            crate::plugins::ui::bind_key(index - config.shortcuts.len(), &key);
+        }
         save(&config);
         if let Some(app) = app_weak.upgrade() {
             app.global::<SettingsUi>().set_shortcuts(shortcut_model(&config));

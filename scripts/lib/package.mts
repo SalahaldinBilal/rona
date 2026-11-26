@@ -80,6 +80,7 @@ export function playerRegistration(extensions: Extensions): string {
         ...extensions.video.map((extension) => [extension, "video"]),
         ...extensions.audio.map((extension) => [extension, "audio"]),
         ...extensions.playlist.map((extension) => [extension, "playlist"]),
+        ...extensions.plugin.map((extension) => [extension, "plugin"]),
     ];
 
     const install = [
@@ -92,9 +93,9 @@ export function playerRegistration(extensions: Extensions): string {
         `WriteRegStr SHCTX "Software\\RegisteredApplications" "${PRODUCT}" "${capabilities}"`,
     ];
     const uninstall: string[] = [];
-    // Rona's own playlist format has no other app to take it from, so Rona is its default. The uninstaller only
-    // clears that default while it still points at Rona.
-    for (const extension of extensions.playlist) {
+    // Rona's own playlist and plugin formats have no other app to take them from, so Rona is their default. The
+    // uninstaller only clears that default while it still points at Rona.
+    for (const extension of [...extensions.playlist, ...extensions.plugin]) {
         const key = `Software\\Classes\\.${extension}`;
         const label = `keep_default_${extension}`;
         install.push(`WriteRegStr SHCTX "${key}" "" "Rona.${extension}"`);

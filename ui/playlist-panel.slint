@@ -6,6 +6,7 @@ import { IconButton } from "components/buttons.slint";
 import { Clickable } from "components/clickable.slint";
 import { TextButton } from "components/form.slint";
 import { ShuffleButton, RepeatButton } from "components/play-modes.slint";
+import { PluginsUi } from "plugins.slint";
 
 export global PlaylistLayout {
     // Rust works out each row's place from these, so they must match ROW_HEIGHT and HEADING_HEIGHT in playlist.rs.
@@ -404,7 +405,8 @@ component PlaylistRow inherits Rectangle {
         x: area.mouse-x;
         y: area.mouse-y;
         width: 180px;
-        height: (root.menu-rows + (root.item.problem == "File not found" ? 1 : 0)) * 28px + 9px + 10px;
+        height: (root.menu-rows + (root.item.problem == "File not found" ? 1 : 0) + PluginsUi.row-menu.length) * 28px
+            + 9px + 10px + (PluginsUi.row-menu.length > 0 ? 9px : 0px);
 
         MenuFrame {
             VerticalLayout {
@@ -441,6 +443,13 @@ component PlaylistRow inherits Rectangle {
                 if PlaylistDoc.has-document: MenuRow {
                     text: "Playlist details...";
                     clicked => { PlaylistDoc.open-details(); }
+                }
+
+                if PluginsUi.row-menu.length > 0: MenuSeparator {}
+
+                for entry[index] in PluginsUi.row-menu: MenuRow {
+                    text: entry.label;
+                    clicked => { PluginsUi.row-menu-clicked(index, root.item.entry); }
                 }
 
                 MenuSeparator {}
