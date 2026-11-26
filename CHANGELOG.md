@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-27
+
 ### Added
 - Plugins. Install a `.rp` file by opening it, dropping it on the window or from Settings > Plugins. Plugins can add buttons, a side panel, menu entries and keys, control playback and the playlist, run programs you allow, and take commands from other programs on your computer. Every permission is a switch you can turn off at any time. The SDK for Rust and TypeScript is in `plugin-sdk`.
 
