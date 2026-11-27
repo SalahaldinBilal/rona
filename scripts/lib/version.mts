@@ -14,8 +14,16 @@ export function bump(version: string): void {
     if (updated === undefined) {
         throw new TaskError('no `version = "..."` line in Cargo.toml');
     }
+    const lockPath = path.join(root, "Cargo.lock");
+    const name = packageName(updated);
+    const lock = setLockVersion(read(lockPath), name, version);
+    if (lock === undefined) {
+        throw new TaskError(`no "${name}" package in Cargo.lock`);
+    }
     write(cargoPath, updated);
     console.log("Updated Cargo.toml");
+    write(lockPath, lock);
+    console.log("Updated Cargo.lock");
 
     const changelogPath = path.join(root, "CHANGELOG.md");
     const { text, empty } = cutRelease(read(changelogPath), version, today());
@@ -23,7 +31,23 @@ export function bump(version: string): void {
     if (empty) {
         console.error("Warning: the Unreleased section of CHANGELOG.md is empty, so this release has no notes.");
     }
-    console.log(`Updated CHANGELOG.md\n\nBumped to ${version}. Cargo.lock follows on the next build.`);
+    console.log(`Updated CHANGELOG.md\n\nBumped to ${version}.`);
+}
+
+function packageName(cargo: string): string {
+    const match = /^name = "([^"]*)"$/m.exec(cargo);
+    if (!match) {
+        throw new TaskError('no `name = "..."` line in Cargo.toml');
+    }
+    return match[1];
+}
+
+export function setLockVersion(lock: string, name: string, version: string): string | undefined {
+    const entry = new RegExp(`(\\[\\[package\\]\\]\\r?\\nname = "${name}"\\r?\\nversion = ")[^"]*"`);
+    if (!entry.test(lock)) {
+        return undefined;
+    }
+    return lock.replace(entry, `$1${version}"`);
 }
 
 export function packageVersion(): string {

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-27
+
 ### Added
 - Reduce noise (Settings > Video), off by default. Light, Medium or Strong calms the shimmering in still areas of low bitrate video.
 

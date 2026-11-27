@@ -12,7 +12,7 @@ const USAGE = `Usage: node scripts/tasks.mts <command>
 
 Commands:
   fetch-mpv          Download libmpv for Windows into vendor/mpv/windows-x86_64/
-  bump <version>     Set the version in Cargo.toml and date the Unreleased section of CHANGELOG.md
+  bump <version>     Set the version in Cargo.toml and Cargo.lock and date the Unreleased section of CHANGELOG.md
   keygen <password>  Create the update signing key pair, encrypted with this password
   package            Build in release mode and package for this platform (NSIS on Windows, AppImage on Linux)
   deploy             Upload a release from bundles/ (run by the release workflow)
