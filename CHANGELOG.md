@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-28
+
 ### Added
 - Make fullscreen 1 px larger than the screen (Settings > Interface), off by default. Try it if fullscreen gets stuck on the video while clicks and keys go to other programs.
 - The log records window focus, which program is in front, mouse presses and times the UI stops responding, to help track down fullscreen freezes.
