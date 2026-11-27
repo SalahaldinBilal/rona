@@ -20,6 +20,10 @@ pub const FILE_NAME: &str = "settings.conf";
 const AUTO_AUDIO_DEVICE: &str = "auto";
 const DEFAULT_SPEEDS: [f32; 6] = [1.0, 1.25, 1.5, 2.0, 0.5, 0.75];const END_ACTIONS: [&str; 3] = ["stop", "next", "loop"];
 const SCALING_CHOICES: [&str; 3] = ["fast", "balanced", "high"];
+const DENOISE_CHOICES: [&str; 4] = ["off", "light", "medium", "strong"];
+// Temporal strengths only, so still areas settle without blurring line art.
+const DENOISE_FILTERS: [&str; 4] =
+    ["", "lavfi=[hqdn3d=0:0:3:2.25]", "lavfi=[hqdn3d=0:0:6:4.5]", "lavfi=[hqdn3d=0:0:10:7.5]"];
 const RENDERERS: [&str; 3] = ["auto", "d3d11", "opengl"];
 const RENDERER_LABELS: [&str; 3] = ["Auto", "Direct3D 11", "OpenGL"];
 // Positions in RENDERERS that this platform offers.
@@ -55,6 +59,7 @@ pub struct Config {
     pub hardware_decoding: bool,
     pub scaling: usize,
     pub deband: bool,
+    pub denoise: usize,
     pub aspect: usize,
 
     pub audio_languages: String,
@@ -112,6 +117,7 @@ impl Default for Config {
             hardware_decoding: true,
             scaling: 1,
             deband: false,
+            denoise: 0,
             aspect: 0,
 
             audio_languages: String::new(),
@@ -203,6 +209,7 @@ impl Config {
                 self.hardware_decoding = defaults.hardware_decoding;
                 self.scaling = defaults.scaling;
                 self.deband = defaults.deband;
+                self.denoise = defaults.denoise;
                 self.aspect = defaults.aspect;
             }
             2 => {
@@ -252,14 +259,21 @@ impl Config {
             _ => (defaults.scale.clone(), defaults.cscale.clone(), defaults.dscale.clone()),
         };
         let font = if self.subtitle_font.trim().is_empty() { "sans-serif" } else { self.subtitle_font.trim() };
+        // The denoise filter runs on the CPU, so decoded frames have to be copied back from the GPU.
+        let hwdec = match (self.hardware_decoding, self.denoise) {
+            (false, _) => "no",
+            (true, 0) => "auto-safe",
+            (true, _) => "auto-copy-safe",
+        };
         vec![
             ("keep-open", if self.end_action == 0 { "always" } else { "yes" }.into()),
             ("loop-file", if self.end_action == 2 { "inf" } else { "no" }.into()),
-            ("hwdec", if self.hardware_decoding { "auto-safe" } else { "no" }.into()),
+            ("hwdec", hwdec.into()),
             ("scale", scale),
             ("cscale", cscale),
             ("dscale", dscale),
             ("deband", yes_no(self.deband)),
+            ("vf", DENOISE_FILTERS[self.denoise].into()),
             // settings.conf keeps "-1" for the file's own aspect, which mpv now wants as "no".
             ("video-aspect-override", if self.aspect == 0 { "no" } else { ASPECT_RATIOS[self.aspect] }.into()),
             ("alang", self.audio_languages.clone()),
@@ -295,6 +309,7 @@ impl Config {
             ("hardware-decoding", yes_no(self.hardware_decoding)),
             ("scaling", SCALING_CHOICES[self.scaling].into()),
             ("deband", yes_no(self.deband)),
+            ("denoise", DENOISE_CHOICES[self.denoise].into()),
             ("aspect", ASPECT_RATIOS[self.aspect].into()),
             ("audio-languages", self.audio_languages.clone()),
             ("volume-max", VOLUME_LIMITS[self.volume_max].into()),
@@ -354,6 +369,7 @@ impl Config {
             "hardware-decoding" => set_flag(&mut self.hardware_decoding, value),
             "scaling" => set_choice(&mut self.scaling, value, &SCALING_CHOICES),
             "deband" => set_flag(&mut self.deband, value),
+            "denoise" => set_choice(&mut self.denoise, value, &DENOISE_CHOICES),
             "aspect" => set_choice(&mut self.aspect, value, &ASPECT_RATIOS),
             "audio-languages" => self.audio_languages = value.into(),
             "volume-max" => set_choice(&mut self.volume_max, value, &VOLUME_LIMITS),
@@ -624,6 +640,7 @@ fn write_ui(ui: &SettingsUi, config: &Config, devices: &[AudioDevice]) {
     ui.set_hardware_decoding(if config.hardware_decoding { 0 } else { 1 });
     ui.set_scaling(config.scaling as i32);
     ui.set_deband(config.deband);
+    ui.set_denoise(config.denoise as i32);
     ui.set_aspect(config.aspect as i32);
 
     ui.set_audio_languages(config.audio_languages.as_str().into());
@@ -681,6 +698,7 @@ fn read_ui(ui: &SettingsUi, config: &mut Config, devices: &[AudioDevice]) {
     config.hardware_decoding = ui.get_hardware_decoding() == 0;
     config.scaling = index(ui.get_scaling(), SCALING_CHOICES.len());
     config.deband = ui.get_deband();
+    config.denoise = index(ui.get_denoise(), DENOISE_CHOICES.len());
     config.aspect = index(ui.get_aspect(), ASPECT_RATIOS.len());
 
     config.audio_languages = ui.get_audio_languages().trim().into();

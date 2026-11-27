@@ -259,6 +259,21 @@ component VideoPage inherits Page {
     }
 
     LabeledRow {
+        label: "Reduce noise";
+
+        Select {
+            horizontal-stretch: 1;
+            options: ["Off", "Light", "Medium", "Strong"];
+            current-index <=> Settings.denoise;
+            selected => { Settings.changed(); }
+        }
+    }
+
+    InfoText {
+        text: "Calms shimmering in still areas of low bitrate video. Runs on the CPU, so stronger levels cost more.";
+    }
+
+    LabeledRow {
         label: "Aspect ratio";
 
         Select {
