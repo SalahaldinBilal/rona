@@ -184,7 +184,7 @@ fn push_list(rows: &mut Vec<Row>, map: &Map<String, Value>, images: Images) {
             entry: string(entry, "id"),
             label: string(entry, "title"),
             text: string(entry, "subtitle"),
-            image: entry.get("image").and_then(Value::as_str).and_then(|id| images(id)),
+            image: entry.get("image").and_then(Value::as_str).and_then(images),
             items: buttons,
             ..Row::default()
         });
@@ -342,7 +342,7 @@ mod tests {
         let tree = vec![json!({ "type": "group", "children": [{ "type": "row", "children": [
             { "type": "toggle", "id": "private", "value": false },
         ]}]})];
-        let filled = with_values(&tree, &|id| (id == "private").then(|| json!(true)));
+        let filled = with_values(&tree, &|id| (id == "private").then_some(json!(true)));
         assert!(rows(&filled, &no_images)[0].items[0].checked);
     }
 }

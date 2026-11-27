@@ -535,6 +535,16 @@ component InterfacePage inherits Page {
         Rectangle { horizontal-stretch: 1; }
     }
 
+    if Settings.fullscreen-oversize-available: Checkbox {
+        text: "Make fullscreen 1 px larger than the screen";
+        checked <=> Settings.fullscreen-oversize;
+        toggled => { Settings.changed(); }
+    }
+
+    if Settings.fullscreen-oversize-available: InfoText {
+        text: "Try this if fullscreen gets stuck showing the video while clicks and keys go to other programs. The extra pixel is off screen. Edges next to another screen stay as they are.";
+    }
+
     if PluginsUi.control-prefs.length > 0: VerticalLayout {
         spacing: 10px;
 

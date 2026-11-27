@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- Make fullscreen 1 px larger than the screen (Settings > Interface), off by default. Try it if fullscreen gets stuck on the video while clicks and keys go to other programs.
+- The log records window focus, which program is in front, mouse presses and times the UI stops responding, to help track down fullscreen freezes.
+
+### Fixed
+- The log's first lines showed the mpv version as "mpv mpv v0.42.0".
+
 ## [0.2.1] - 2026-11-27
 
 ### Added

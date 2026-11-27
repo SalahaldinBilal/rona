@@ -250,8 +250,11 @@ impl Header {
     }
 }
 
-// Children of an element already in memory, as (id, data, whole element).
-fn children(data: &[u8]) -> Result<Vec<(u32, &[u8], &[u8])>> {
+// An element's id, its data and the whole element.
+type Child<'a> = (u32, &'a [u8], &'a [u8]);
+
+// Children of an element already in memory.
+fn children(data: &[u8]) -> Result<Vec<Child<'_>>> {
     let mut list = Vec::new();
     let mut at = 0;
     while at < data.len() {

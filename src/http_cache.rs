@@ -217,7 +217,9 @@ pub fn unwrap_url(source: &str) -> String {
 }
 
 static DOWNLOADED_BYTES: AtomicU64 = AtomicU64::new(0);
-static CURRENT: OnceLock<Mutex<Option<(String, Arc<Mutex<ByteCache>>)>>> = OnceLock::new();
+type SharedCache = Arc<Mutex<ByteCache>>;
+
+static CURRENT: OnceLock<Mutex<Option<(String, SharedCache)>>> = OnceLock::new();
 
 pub fn downloaded_bytes() -> u64 {
     DOWNLOADED_BYTES.load(Ordering::Relaxed)
@@ -327,10 +329,10 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 // Only the most recently opened URL keeps its cache, so memory stays bounded.
 fn cache_for(url: &str) -> Arc<Mutex<ByteCache>> {
     let mut current = current();
-    if let Some((cached_url, cache)) = current.as_ref() {
-        if cached_url == url {
-            return cache.clone();
-        }
+    if let Some((cached_url, cache)) = current.as_ref()
+        && cached_url == url
+    {
+        return cache.clone();
     }
     if let Some((cached_url, cache)) = current.as_ref() {
         info!("dropping the byte cache of {cached_url} ({} MiB)", lock(cache).chunks.len());

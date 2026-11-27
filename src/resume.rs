@@ -99,7 +99,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 pub fn wire(app: &AppWindow, mpv: &Mpv, config: &SharedConfig) {
     let file = settings::config_dir().map(|dir| dir.join(FILE_NAME));
-    let mut entries = file.as_ref().map(|file| load_entries(file)).unwrap_or_default();
+    let mut entries = file.as_ref().map(load_entries).unwrap_or_default();
     let before = entries.len();
     forget_old(&mut entries, max_age(config));
     info!("{} resume positions, {} expired", entries.len(), before - entries.len());

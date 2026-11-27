@@ -379,6 +379,9 @@ export global Settings {
     // 0 opens the recorder in its own window, 1 as a sidebar.
     in-out property <int> recorder-placement;
     in-out property <string> hide-controls-after;
+    in-out property <bool> fullscreen-oversize;
+    // Only Windows sizes the fullscreen window itself.
+    in property <bool> fullscreen-oversize-available;
     in-out property <string> osd-duration;
 
     in property <[ShortcutItem]> shortcuts;

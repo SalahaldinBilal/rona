@@ -410,14 +410,16 @@ mod tests {
         ("grep", vec!["x".into()])
     }
 
+    type Talker = (&'static str, Vec<String>, fn(&str) -> Vec<u8>);
+
     // A program that prints each line it's given right away, and the input that makes it print `text`.
     #[cfg(windows)]
-    fn talker() -> (&'static str, Vec<String>, fn(&str) -> Vec<u8>) {
+    fn talker() -> Talker {
         ("cmd", vec!["/d".into(), "/q".into(), "/k".into(), "prompt $s".into()], |text| format!("echo {text}\r\n").into_bytes())
     }
 
     #[cfg(unix)]
-    fn talker() -> (&'static str, Vec<String>, fn(&str) -> Vec<u8>) {
+    fn talker() -> Talker {
         ("grep", vec!["--line-buffered".into(), "".into()], |text| format!("{text}\n").into_bytes())
     }
 

@@ -53,6 +53,7 @@ pub fn create(app: &AppWindow, mpv: &Mpv, config: &SharedConfig) -> Result<(), s
     // As in the main window, any click takes focus from a text field.
     let window_weak = window.as_weak();
     window.window().on_winit_window_event(move |_, event| {
+        crate::diagnostics::window_event("recorder window", event);
         if let WindowEvent::MouseInput { state: ElementState::Pressed, .. } = event
             && let Some(window) = window_weak.upgrade()
         {
@@ -182,6 +183,8 @@ fn attach_to_main_window(window: &RecorderWindow, app: &AppWindow) {
     crate::enable_window_shadow(window.window());
     window.window().with_winit_window(|winit| winit.set_skip_taskbar(true));
     if let (Some(owned), Some(owner)) = (crate::window_hwnd(window.window()), crate::window_hwnd(app.window())) {
+        crate::diagnostics::set_recorder_window(owned);
+        crate::hook_recorder_window(owned);
         unsafe { SetWindowLongPtrW(owned, GWLP_HWNDPARENT, owner.0 as isize) };
     }
 }

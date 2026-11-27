@@ -166,8 +166,11 @@ struct Profiles {
     overrides: Vec<Option<Value>>,
     items: Rc<VecModel<ThemeItem>>,
     save_timer: Timer,
-    pending_save: Rc<RefCell<Option<(PathBuf, Vec<(String, String)>)>>>,
+    pending_save: Rc<RefCell<Option<PendingSave>>>,
 }
+
+// A profile's file and the values to write to it.
+type PendingSave = (PathBuf, Vec<(String, String)>);
 
 impl Drop for Profiles {
     fn drop(&mut self) {

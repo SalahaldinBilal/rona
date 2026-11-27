@@ -12,7 +12,9 @@ use crate::logging::{debug, info, warn};
 use crate::mpv::Mpv;
 use crate::shortcuts::{self, Action};
 use crate::video::Renderer;
-use crate::{AppWindow, Player, Settings as SettingsUi, ShortcutItem, log_error, update_window_level};
+use crate::{
+    AppWindow, Player, Settings as SettingsUi, ShortcutItem, log_error, set_fullscreen_oversize, update_window_level,
+};
 
 pub type SharedConfig = Rc<RefCell<Config>>;
 
@@ -90,6 +92,7 @@ pub struct Config {
     pub recorder_placement: usize,
     pub hide_controls_after: f64,
     pub osd_duration: f64,
+    pub fullscreen_oversize: bool,
 
     // Empty for the default theme.
     pub theme: String,
@@ -148,6 +151,7 @@ impl Default for Config {
             recorder_placement: 0,
             hide_controls_after: 2.5,
             osd_duration: 1.2,
+            fullscreen_oversize: false,
 
             theme: String::new(),
 
@@ -244,6 +248,7 @@ impl Config {
                 self.recorder_placement = defaults.recorder_placement;
                 self.hide_controls_after = defaults.hide_controls_after;
                 self.osd_duration = defaults.osd_duration;
+                self.fullscreen_oversize = defaults.fullscreen_oversize;
             }
             // 6 is the theme page, which reverts its profile in theme.rs instead.
             7 => self.shortcuts = defaults.shortcuts,
@@ -336,6 +341,7 @@ impl Config {
             ("recorder", RECORDER_PLACEMENTS[self.recorder_placement].into()),
             ("hide-controls-after", self.hide_controls_after.to_string()),
             ("osd-duration", self.osd_duration.to_string()),
+            ("fullscreen-oversize", yes_no(self.fullscreen_oversize)),
             ("theme", self.theme.clone()),
             ("check-updates", yes_no(self.check_updates)),
         ]
@@ -398,6 +404,7 @@ impl Config {
             "recorder" => set_choice(&mut self.recorder_placement, value, &RECORDER_PLACEMENTS),
             "hide-controls-after" => set_number(&mut self.hide_controls_after, value, is_positive),
             "osd-duration" => set_number(&mut self.osd_duration, value, is_positive),
+            "fullscreen-oversize" => set_flag(&mut self.fullscreen_oversize, value),
             "theme" => self.theme = value.into(),
             "check-updates" => set_flag(&mut self.check_updates, value),
             _ => {
@@ -671,6 +678,8 @@ fn write_ui(ui: &SettingsUi, config: &Config, devices: &[AudioDevice]) {
     ui.set_recorder_placement(config.recorder_placement as i32);
     ui.set_hide_controls_after(config.hide_controls_after.to_string().into());
     ui.set_osd_duration(config.osd_duration.to_string().into());
+    ui.set_fullscreen_oversize(config.fullscreen_oversize);
+    ui.set_fullscreen_oversize_available(cfg!(windows));
 
     ui.set_shortcuts(shortcut_model(config));
 
@@ -732,6 +741,7 @@ fn read_ui(ui: &SettingsUi, config: &mut Config, devices: &[AudioDevice]) {
     config.recorder_placement = index(ui.get_recorder_placement(), RECORDER_PLACEMENTS.len());
     set_number(&mut config.hide_controls_after, &ui.get_hide_controls_after(), is_positive);
     set_number(&mut config.osd_duration, &ui.get_osd_duration(), is_positive);
+    config.fullscreen_oversize = ui.get_fullscreen_oversize();
 
     config.check_updates = ui.get_check_updates();
 }
@@ -749,6 +759,7 @@ fn apply(mpv: &Mpv, app: &AppWindow, old: Option<&Config>, new: &Config, default
     }
     app.global::<Player>().set_volume_limit(new.volume_limit());
     update_window_level(app);
+    set_fullscreen_oversize(app, new.fullscreen_oversize);
 }
 
 fn log_changes(old: &Config, new: &Config) {

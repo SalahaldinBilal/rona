@@ -342,7 +342,10 @@ mod tests {
         }
     }
 
-    fn first_launch(name: &str) -> (Listener, mpsc::Receiver<(Vec<String>, Option<String>)>) {
+    // The sources and activation token each later launch handed over.
+    type Received = mpsc::Receiver<(Vec<String>, Option<String>)>;
+
+    fn first_launch(name: &str) -> (Listener, Received) {
         let Claim::Primary(server) = claim_named(name, &launch(&[], None)) else {
             panic!("the first launch should become the window")
         };

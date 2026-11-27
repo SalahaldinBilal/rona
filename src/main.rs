@@ -6,6 +6,7 @@ mod buffered;
 mod capture;
 mod chapter_skip;
 mod color;
+mod diagnostics;
 mod encoders;
 mod extensions;
 mod http_cache;
@@ -40,7 +41,7 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::Display;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -346,7 +347,7 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn Error>> {
     let mpv = Mpv::new()?;
     // Verbose, so a slow open or a stall can be followed step by step next to Rona's own lines.
     log_error(mpv.request_log_messages("v"));
-    info!("mpv {}, ffmpeg {}", mpv.get_string("mpv-version").unwrap_or_default(), mpv.get_string("ffmpeg-version").unwrap_or_default());
+    info!("{}, ffmpeg {}", mpv.get_string("mpv-version").unwrap_or_default(), mpv.get_string("ffmpeg-version").unwrap_or_default());
     mpv.add_stream_protocol(http_cache::PROTOCOL, http_cache::open_stream)?;
     observe_properties(&mpv)?;
     settings::wire(&mpv, &app, &config);
@@ -407,7 +408,10 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn Error>> {
     }
 
     info!("window ready");
-    app.run()?;
+    diagnostics::start();
+    let ran = app.run();
+    diagnostics::stop();
+    ran?;
     info!("event loop ended");
     plugins::ui::shutdown();
     if let Some(listener) = &listener {
@@ -667,7 +671,7 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                 }
                 if audio_info::can_read(&path) {
                     if audio_info::get(&path).is_some() {
-                        show_pre_read(&player, state, &path);
+                        show_pre_read(player, state, &path);
                     } else {
                         audio_info::read_next(&path);
                     }
@@ -679,7 +683,7 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                     player.set_phase(Phase::Idle);
                     player.set_media_title(SharedString::new());
                     player.set_ended(false);
-                    forget_audio_view(&player);
+                    forget_audio_view(player);
                 }
             }
             Event::PropertyChange { id: EOF_REACHED, value: Some(PropertyValue::Flag(reached)) } => {
@@ -721,7 +725,7 @@ fn drain_events(mpv: &Mpv, app: &AppWindow, state: &EventState) {
                 state.track_refresh.fetch_add(1, Ordering::SeqCst);
                 player.set_tracks_known(false);
                 if !continuing_audio {
-                    forget_audio_view(&player);
+                    forget_audio_view(player);
                     player.set_audio_title(SharedString::new());
                     player.set_audio_artist(SharedString::new());
                     player.set_audio_album(SharedString::new());
@@ -1388,6 +1392,7 @@ fn attach_video(
             });
         }
         RenderingState::BeforeRendering => {
+            diagnostics::frame_drawn();
             if let (Some(video), Some(app)) = (&mut video, app_weak.upgrade()) {
                 let window = app.window();
                 let size = window.size();
@@ -1708,6 +1713,11 @@ fn update_window_level(app: &AppWindow) {
     let pinned = app.global::<WindowControls>().get_pinned();
     let while_playing = app.global::<Settings>().get_on_top_while_playing() && !app.global::<Player>().get_paused();
     let level = if pinned || while_playing { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal };
+    static LAST_LEVEL: AtomicU8 = AtomicU8::new(0);
+    let code = if level == WindowLevel::AlwaysOnTop { 2 } else { 1 };
+    if LAST_LEVEL.swap(code, Ordering::Relaxed) != code {
+        debug!("window level {}", if code == 2 { "on top" } else { "normal" });
+    }
     app.window().with_winit_window(|window| window.set_window_level(level));
 }
 
@@ -1718,6 +1728,7 @@ fn wire_window_controls(app: &AppWindow, osd: &Osd, config: &SharedConfig, saved
     let app_weak = app.as_weak();
     let mut handle_drop = opener::drop_handler(app);
     app.window().on_winit_window_event(move |_, event| {
+        diagnostics::window_event("main window", event);
         if let WindowEvent::MouseInput { state: ElementState::Pressed, .. } = event
             && let Some(app) = app_weak.upgrade()
         {
@@ -1906,6 +1917,7 @@ fn subclass_window(app: &AppWindow) {
     use windows::Win32::UI::Shell::SetWindowSubclass;
 
     let Some(hwnd) = window_hwnd(app.window()) else { return };
+    diagnostics::set_main_window(hwnd);
     if !unsafe { SetWindowSubclass(hwnd, Some(window_messages), 1, 0) }.as_bool() {
         error!("could not hook the window for fullscreen sizing and cursor hiding");
     }
@@ -1913,6 +1925,124 @@ fn subclass_window(app: &AppWindow) {
 
 #[cfg(not(target_os = "windows"))]
 fn subclass_window(_app: &AppWindow) {}
+
+// On focus changes Windows paints its own title bar over a frameless window, which winit keeps WS_CAPTION on.
+// Without WS_VISIBLE for that one call it can't paint, and winit still sees the focus change.
+#[cfg(target_os = "windows")]
+unsafe fn activate_without_caption(
+    hwnd: windows::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::UI::Shell::DefSubclassProc;
+    use windows::Win32::UI::WindowsAndMessaging::{GWL_STYLE, GetWindowLongW, SetWindowLongW, WS_VISIBLE};
+
+    let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) };
+    let visible = style as u32 & WS_VISIBLE.0 != 0;
+    if visible {
+        unsafe { SetWindowLongW(hwnd, GWL_STYLE, style & !(WS_VISIBLE.0 as i32)) };
+    }
+    let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+    if visible {
+        unsafe { SetWindowLongW(hwnd, GWL_STYLE, style) };
+    }
+    result
+}
+
+/// The recorder window is frameless too, and only needs the title bar kept from being painted.
+#[cfg(target_os = "windows")]
+fn hook_recorder_window(hwnd: windows::Win32::Foundation::HWND) {
+    use windows::Win32::UI::Shell::SetWindowSubclass;
+
+    if !unsafe { SetWindowSubclass(hwnd, Some(recorder_messages), 2, 0) }.as_bool() {
+        error!("could not hook the recorder window");
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn recorder_messages(
+    hwnd: windows::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+    _subclass_id: usize,
+    _data: usize,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::UI::Shell::DefSubclassProc;
+    use windows::Win32::UI::WindowsAndMessaging::WM_NCACTIVATE;
+
+    if message == WM_NCACTIVATE {
+        return unsafe { activate_without_caption(hwnd, message, wparam, lparam) };
+    }
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+}
+
+#[cfg(target_os = "windows")]
+static FULLSCREEN_OVERSIZE: AtomicBool = AtomicBool::new(false);
+
+/// Fullscreen 1 px past the screen, so the window no longer covers it exactly.
+#[cfg(target_os = "windows")]
+fn set_fullscreen_oversize(app: &AppWindow, on: bool) {
+    use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
+    use windows::Win32::UI::WindowsAndMessaging::{SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
+
+    if FULLSCREEN_OVERSIZE.swap(on, Ordering::Relaxed) == on {
+        return;
+    }
+    info!("fullscreen 1 px larger than the screen: {}", if on { "on" } else { "off" });
+    let Some(hwnd) = window_hwnd(app.window()) else { return };
+    if !has_fullscreen_style(hwnd) {
+        return;
+    }
+    let Some(rect) = fullscreen_rect(unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) }) else { return };
+    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+    let flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED;
+    if let Err(err) = unsafe { SetWindowPos(hwnd, None, rect.left, rect.top, width, height, flags) } {
+        error!("could not resize the fullscreen window: {err}");
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_fullscreen_oversize(_app: &AppWindow, _on: bool) {}
+
+// winit removes WS_CAPTION only while fullscreen.
+#[cfg(target_os = "windows")]
+fn has_fullscreen_style(hwnd: windows::Win32::Foundation::HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GWL_STYLE, GetWindowLongW, WS_CAPTION};
+    (unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32) & WS_CAPTION.0 == 0
+}
+
+// An edge that borders another screen stays put, or a 1 px strip of the video would show there.
+#[cfg(target_os = "windows")]
+fn fullscreen_rect(monitor: windows::Win32::Graphics::Gdi::HMONITOR) -> Option<windows::Win32::Foundation::RECT> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONULL, MONITORINFO, MonitorFromPoint};
+
+    let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+    if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
+        return None;
+    }
+    let mut rect = info.rcMonitor;
+    if !FULLSCREEN_OVERSIZE.load(Ordering::Relaxed) {
+        return Some(rect);
+    }
+    let screen_at = |x: i32, y: i32| !unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONULL) }.is_invalid();
+    let (middle_x, middle_y) = ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+    if !screen_at(rect.left - 1, middle_y) {
+        rect.left -= 1;
+    }
+    if !screen_at(rect.right, middle_y) {
+        rect.right += 1;
+    }
+    if !screen_at(middle_x, rect.top - 1) {
+        rect.top -= 1;
+    }
+    if !screen_at(middle_x, rect.bottom) {
+        rect.bottom += 1;
+    }
+    Some(rect)
+}
 
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn window_messages(
@@ -1923,26 +2053,47 @@ unsafe extern "system" fn window_messages(
     _subclass_id: usize,
     _data: usize,
 ) -> windows::Win32::Foundation::LRESULT {
-    use windows::Win32::Foundation::LRESULT;
-    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect};
+    use windows::Win32::Foundation::{LRESULT, RECT};
+    use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromRect, MonitorFromWindow};
     use windows::Win32::UI::Shell::DefSubclassProc;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GWL_STYLE, GetWindowLongW, HTCLIENT, NCCALCSIZE_PARAMS, SetCursor, WM_NCCALCSIZE, WM_SETCURSOR, WS_CAPTION,
+        HTCLIENT, NCCALCSIZE_PARAMS, SWP_NOMOVE, SWP_NOSIZE, SetCursor, WINDOWPOS, WM_NCACTIVATE, WM_NCCALCSIZE,
+        WM_SETCURSOR, WM_WINDOWPOSCHANGING,
     };
 
+    if message == WM_NCACTIVATE {
+        return unsafe { activate_without_caption(hwnd, message, wparam, lparam) };
+    }
     if message == WM_SETCURSOR && (lparam.0 & 0xffff) as u32 == HTCLIENT && POINTER_HIDDEN.load(Ordering::Relaxed) {
         unsafe { SetCursor(None) };
         return LRESULT(1);
     }
+    if message == WM_WINDOWPOSCHANGING && FULLSCREEN_OVERSIZE.load(Ordering::Relaxed) && has_fullscreen_style(hwnd) {
+        let position = unsafe { &mut *(lparam.0 as *mut WINDOWPOS) };
+        let moves_or_sizes = position.flags.0 & (SWP_NOMOVE.0 | SWP_NOSIZE.0) != (SWP_NOMOVE.0 | SWP_NOSIZE.0);
+        let monitor = if position.flags.0 & SWP_NOMOVE.0 == 0 {
+            let target = RECT {
+                left: position.x,
+                top: position.y,
+                right: position.x + position.cx,
+                bottom: position.y + position.cy,
+            };
+            unsafe { MonitorFromRect(&target, MONITOR_DEFAULTTONEAREST) }
+        } else {
+            unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) }
+        };
+        if moves_or_sizes && let Some(rect) = fullscreen_rect(monitor) {
+            (position.x, position.y) = (rect.left, rect.top);
+            (position.cx, position.cy) = (rect.right - rect.left, rect.bottom - rect.top);
+            position.flags.0 &= !(SWP_NOMOVE.0 | SWP_NOSIZE.0);
+        }
+    }
     // winit clamps a maximized frameless window to the work area even in fullscreen (winit#4756).
-    // winit removes WS_CAPTION only while fullscreen.
-    let fullscreen = || unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32 & WS_CAPTION.0 == 0;
-    if message == WM_NCCALCSIZE && wparam.0 != 0 && fullscreen() {
+    if message == WM_NCCALCSIZE && wparam.0 != 0 && has_fullscreen_style(hwnd) {
         let params = unsafe { &mut *(lparam.0 as *mut NCCALCSIZE_PARAMS) };
         let monitor = unsafe { MonitorFromRect(&params.rgrc[0], MONITOR_DEFAULTTONEAREST) };
-        let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
-        if unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
-            params.rgrc[0] = info.rcMonitor;
+        if let Some(rect) = fullscreen_rect(monitor) {
+            params.rgrc[0] = rect;
             return LRESULT(0);
         }
     }
